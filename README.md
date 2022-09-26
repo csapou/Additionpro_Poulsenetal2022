@@ -1,1 +1,1 @@
-# Additionpro_Poulsenetal2022
+Script used in the publication "Association of general health and lifestyle-associated factors with the salivary microbiota - Lessons learned from the ADDITION-PRO cohort"
