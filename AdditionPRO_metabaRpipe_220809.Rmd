@@ -1,0 +1,4237 @@
+---
+title: "ADDITION-PRO analyses microbiome"
+author: "Casper Sahl Poulsen"
+date: '22042022'
+always_allow_html: yes
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '5'
+  html_document:
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE, 
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+## Introduction
+Script used in the publication "Association of general health and lifestyle-associated factors with the salivary microbiota - Lessons learned from the ADDITION-PRO cohort"  
+  
+This is an updated script including the data that was run with the metabaRpipe pipeline. https://github.com/fconstancias/metabaRpipe. See Rstudio server for detailed running of the pipeline.
+Summary below:
+```{r Running metabaRpipe on hulk, eval=FALSE}
+#Custom script from Oto to cp and rename cp_and_rename.sh also solved issue with wrong naming of files from provider.
+#Had four files (10282, 10329, 10585, 10817) in both batches renamed to .....re in batch 120, but 10282 had different number of   #forward and reverse reads. Removed from further analyses  
+#Not able to submit with sbatch submitted with a screen (TMUX)
+
+
+Rscript ${MY_DIR}metabaRpipe/Rscripts/dada2_metabarcoding_pipeline.Rscript \
+-i metabaRpipe/test-data/ \
+--preset V4-Addition-PRO \
+--rm_primers FALSE \
+--db /home/lqr378/metabaRpipe/test4_cloneagain_ownsmall/metabaRpipe/databases/eHOMD_RefSeq_dada2_V15.22.fasta.gz \
+--db_species /home/lqr378/metabaRpipe/test4_cloneagain_ownsmall/metabaRpipe/databases/eHOMD_RefSeq_dada2_assign_species_V15.22.fasta.gz \
+--metadata metabaRpipe/metadata.xlsx \
+--save_out test_pipe_Rscript.RDS \
+-f ${MY_DIR}metabaRpipe/Rscripts/functions.R > mylogs.txt 2>&1
+```
+  
+This script is initially only intended to investigate microbiome, see other script for preliminary analyses of the metabolomics. 
+  
+### Samples
+Ref: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3583712/ "Protocol for ADDITION-PRO: a longitudinal cohort study of the cardiovascular experience of individuals at high risk for diabetes recruited from Danish primary care"  
+
+### Sample selection
+How were samples selected for omics analysis??? Maybe all were included where saliva was available (Saliva n=786).
+
+### Other datasets
+Metabolomics: Metabolomics saliva. Extracted with 4-vol methanol and analysed by reverse phase LC-MS in both negative and positive mode. Metabolites are identified by their m/z, fragmentation pattern and intensities normalized to QC samples. Two samples were excluded due to lack of material.  
+In file obtained data from 775 samples on 224 metabolites.  
+GWAS: Genotyped with Illumina Infinium HumanCoreExome Beadchip(n=1657)
+Phenotypic data: Diabetes risk, anthropometry, body composition, biochemistry, physical activity and cardiovascular risk factors including aortic stiffness and central blood pressure.
+
+### Packages 
+```{r}
+##install.packages("Rmisc")
+#library(Rmisc)
+
+library(plyr)
+
+#install.packages(c("dplyr"))
+library(dplyr)
+
+#install.packages("readxl")
+library("readxl")
+
+#install.packages("VennDiagram")
+library(VennDiagram)
+
+library(gridExtra)
+
+library(stringr)
+
+library(ggplot2)
+
+library(vegan)
+
+#install.packages("plotly")
+library(plotly)
+
+library(igraph)
+
+library(knitr)
+
+#install.packages("BiocManager")
+#BiocManager::install("SIAMCAT")
+#library("SIAMCAT")
+
+#install.packages("BiodiversityR")
+library(BiodiversityR)
+
+#install.packages("reshape2")
+library(reshape2)
+
+#BiocManager::install("DESeq2")
+library("DESeq2")
+
+#devtools::install_bitbucket("biobakery/maaslin2@default", ref="tip")
+#BiocManager::install("Maaslin2")
+library("Maaslin2")
+
+library("phyloseq")
+
+#install.packages("remotes")
+#remotes::install_github("jstokholm/rabuplot")
+library("rabuplot")
+
+#install.packages("ggmosaic")
+library("ggmosaic")
+
+#install.packages("ggraph")
+library("ggraph")
+
+library("igraph")
+
+library("pheatmap")
+
+library("RColorBrewer")
+
+library("cowplot")
+
+library("forcats")
+
+#BiocManager::install('mixOmics')
+library("mixOmics")
+
+library("ggpubr")
+
+#remotes::install_github("jonathanth/copiome@main", force=TRUE)
+library("copiome")
+```
+
+## Reading in new data 
+```{r}
+readRDS("dada2/phyloseq.RDS") -> ps
+
+ps
+
+#ps %>% refseq()
+
+#ps %>%  tax_table()
+feature <- ps %>%  tax_table() %>% data.frame()
+
+
+#ps %>%  otu_table()
+microbio <- ps %>%  otu_table() %>% data.frame() %>% t() %>% data.frame() #Adds X 
+
+#ps %>% sample_data()
+metaq <- ps %>% sample_data()
+
+
+#readRDS("dada2/test_pipe_Rscript.RDS") -> out #Large file 
+#ls(out)
+#Contains "filtering_denoising", "merging", "physeq", "qplot", "taxo"
+```
+
+
+
+### Comparing with previous data
+```{r}
+load("dada2/DenoisedData.RData") #From Timo
+Microbio <- data.frame(seqtab.nochim) 
+#Total reads
+sum(ReadSummary$NoReads)
+mean(ReadSummary$NoReads)
+sd(ReadSummary$NoReads)
+median(ReadSummary$NoReads)
+range(ReadSummary$NoReads)
+
+sum(Microbio)
+#Microbio: 786 obs. of 3319 variables old
+#microbio: 789 obs. of 5748 variables new but below renames to Microbio a little confusing
+mean(colSums(Microbio))
+sd(colSums(Microbio))
+median(colSums(Microbio))
+range(colSums(Microbio))
+
+
+## Phenotypes 
+#Shared
+length(intersect(paste("X", rownames(Microbio), sep=""), rownames(microbio)))
+setdiff(paste("X", rownames(Microbio), sep=""), rownames(microbio)) 
+setdiff(rownames(microbio), paste("X", rownames(Microbio), sep="")) #Only the 3 re 
+
+
+#load("../../../Data/TimoMail210227/AdditionPro_data_objects/HOMD_Taxonomy.RData")
+#FeatureHOMD <- data.frame(taxa)
+#Feature<-FeatureHOMD
+
+
+```
+
+
+## Pre-processing
+### Subset Pheno 
+```{r}
+##Overwrite the previous files to make naming compatible with the rest of the script copied from 
+  #AdditionPRO_MetaboExpl_200710.Rmd. Is confusing since above the old ones are named the same
+Feature <- feature
+Microbio <- microbio
+
+
+##Phenotypes
+#From Anna mail
+Pheno <- read.delim(file="dada2/AdditionPro_05122014_final_primaryID.txt", 
+                       check.names=FALSE, 
+                       stringsAsFactors = FALSE, 
+                       strip.white=TRUE, 
+                       dec=".")
+
+#PhenoExp <- read_excel("../../../Data/Variable name for Physical activity_AddPro.xlsx") 
+  #169 variables explained 
+
+Pheno$IDX<-paste("X", Pheno$pro_id, sep="")
+
+#Add "X10329re" "X10585re" "X10817re" samples as a copy of not re with rbind
+PhenoRE<-filter(Pheno, IDX=="X10329" | IDX=="X10585" | IDX=="X10817")
+PhenoRE$IDX <- paste(PhenoRE$IDX, "re", sep="")
+Pheno <- rbind(PhenoRE, Pheno)
+
+
+length(intersect(Pheno$IDX, rownames(Microbio))) #746 (749 with re)
+#setdiff(Pheno$IDX, rownames(Microbio)) #samples in pheno not in microbio
+setdiff(rownames(Microbio), Pheno$IDX) #Samples in microbio not in pheno
+#missingsamples<-setdiff(rownames(Microbio), Pheno$IDX) #Samples in microbio not in pheno
+#write.table(missingsamples, file="../ADDPRO_missingpheno_220426.txt", 
+#            quote = F, row.names = F, sep="\t")
+length(setdiff(rownames(Microbio), Pheno$IDX)) #43 Samples not in Pheno (40 after include re)
+
+#Consider to remove 0 and 6 gly_stat and pool group 2-5.
+table(Pheno$gly_stat, useNA="always")
+##Remove group 0 and 6
+#Pheno<-subset(Pheno, gly_stat %in% c(1:5))
+
+#Make cat variable gly_stat
+Pheno$Glycaemia_Status<-ifelse(Pheno$gly_stat==0, 
+                                   "Unclass",
+                               ifelse(Pheno$gly_stat==1, 
+                                   "Gr1ngt",
+                                   ifelse(Pheno$gly_stat==2, 
+                                      "Gr2ilFG",
+                                      ifelse(Pheno$gly_stat==3,
+                                             "Gr3ilGT",
+                                             ifelse(Pheno$gly_stat==4, 
+                                             "Gr4IFG_IGT",
+                                             ifelse(Pheno$gly_stat==5, 
+                                             "Gr5SDM",
+                                             ifelse(Pheno$gly_stat==6, 
+                                             "KDM",
+                                             
+                 "UA")))))))
+table(Pheno$Glycaemia_Status, useNA="always")
+#Make classification diabetes risk based on gly_stat
+Pheno$Risk<-as.character(ifelse(Pheno$gly_stat == 0, "Unclass",
+                              ifelse(Pheno$gly_stat == 1, "Low",
+                                     ifelse(Pheno$gly_stat == 2 | Pheno$gly_stat == 3 | Pheno$gly_stat == 4 | Pheno$gly_stat == 5, "High",
+                                            ifelse(Pheno$gly_stat == 6, "KDM",
+                              "UA")))))
+table(Pheno$Risk, useNA="always")
+
+#Create vector names of shared samples
+length(intersect(Pheno$IDX, rownames(Microbio))) #Shared samples 722 (725 with re), after keep gly_stat=0&6 n=749
+setdiff(rownames(Microbio), Pheno$IDX) #Samples in microbio not in pheno
+length(setdiff(rownames(Microbio), Pheno$IDX)) #67 Samples not in Pheno (64 with re), after keep gly_stat=0&6 n=40
+y<-intersect(Pheno$IDX, rownames(Microbio))
+
+#Transpose
+Microbio<-data.frame(t(Microbio))
+MicrobioSub<-dplyr::select(Microbio, one_of(y))
+
+PhenoSub<-subset(Pheno, IDX %in% y)
+
+#Sammenligner glycemia status
+table(PhenoSub$gly_stat)
+table(PhenoSub$gly_stat)/nrow(PhenoSub)
+table(Pheno$gly_stat)
+table(Pheno$gly_stat)/nrow(Pheno)
+
+#By group risk
+aggregate(PhenoSub[, c(5, 9:11)], list(PhenoSub$Risk), mean)
+aggregate(PhenoSub[, c(5, 9:11)], list(PhenoSub$Risk), sd)
+```
+
+
+### Modify microbiome
+```{r}
+#Merge feature and count table
+TaxEdit <- merge(Feature, MicrobioSub, by="row.names") 
+
+#Aggregate the rows that have exactly the same entries and sum counts
+Tax2<-TaxEdit %>% group_by(Kingdom, Phylum, Class, Order, Family, Genus) %>% 
+  summarise_if(is.numeric, funs(sum)) #193 genera previous 164 genera for further analyses 
+
+## Select how to handle NA
+######### Remove all rows containing na values at the specified taxonomic level #########
+
+##Warning, discuss if this is the right way
+#before<-colSums(Tax2[,7:ncol(Tax2)])
+#Tax2 <- Tax2[!is.na(Tax2$Genus), ]
+#after<-colSums(Tax2[,7:ncol(Tax2)])
+#before-after
+##How much data is lost by doing this
+#(before-after)/before
+ 
+####################### Put all NA into an unknown category #############################
+
+#Tax2$Genus <- as.character(Tax2$Genus)
+#Tax2$Genus <- ifelse(is.na(Tax2$Genus), "Unknown", Tax2$Genus)
+
+#if (sum(table(Tax2$Genus)>1)!=1) {
+#  stop("Need unique entries for all genera except unknown")
+#}
+
+#res <- Tax2 %>%
+#  mutate(Genus = ifelse(Genus == "Unknown", 
+#                           paste("Class(", as.character(Class), ")", sep=""), Genus))
+
+#res <- Tax2 %>% 
+#  filter(Genus=="Unknown") %>% 
+#  mutate(Genus = as.character(Class))
+
+#res <- df %>% 
+#  filter(category=="Shirts") %>% 
+#  mutate(category=subcategory)
+
+##Aggregate the unknwown 
+#Tax2<-Tax2 %>% group_by(Kingdom, Phylum, Class, Order, Class, Genus) %>% 
+#  summarise_if(is.numeric, funs(sum))
+
+#### Create classification for NA to higher taxonomic assignment in all tax columns #####
+
+###Does not work
+##for (i in c(2,3,4,5,6)) {
+##  Tax2[,i] <- if(is.na(Tax2[,i]) 
+##                 {replace(paste("(", colnames(Tax2[,c(i-1)]), 
+##                      as.character(Tax2[,c(i-1)]), ")", sep="")))
+##  #Tax2[,i] <- if(is.na(Tax2[,i]), )
+##  } 
+##}
+
+############ Create classification for NA to higher taxonomic assignment ################
+
+##Create classification for NA to higher taxonomic assignment 
+##Put Class NA into an unknown category
+#Tax2$Species <- as.character(Tax2$Species)
+#Tax2$Species <- ifelse(is.na(Tax2$Species), "Unknown", Tax2$Species)
+
+Tax2$Genus <- as.character(Tax2$Genus)
+Tax2$Genus <- ifelse(is.na(Tax2$Genus), "unknown", Tax2$Genus)
+Tax2$Genus <- str_replace(Tax2$Genus, "-", ".")
+
+##Have two entries named acidifaciens
+#Tax2$Family[Tax2$Family == "Family_XI"  & Tax2$Order == "Clostridiales"]<-
+#  "Family_XI(Order(Clostridiales))"
+#Tax2$Family[Tax2$Family == "Family_XI"  & Tax2$Order == "Bacillales"]<-
+#  "Family_XI(Order(Bacillales))"
+
+##Many entries are the same. Provide full species name
+#Tax2$Species <- as.character(paste(Tax2$Genus, Tax2$Species, sep = "_"))
+
+
+#Check if there are multiple entries of the same
+if (sum(table(Tax2$Genus)>1)!=1) {
+  stop("Need unique entries for all species except unknown")
+}
+
+#Assigning new names depending on higher taxonomic rank
+Tax2 <- Tax2 %>%
+  mutate(Genus = ifelse(Genus == "unknown", 
+                           paste("Family.", as.character(Family), ".", sep=""), Genus))
+Tax2 <- Tax2 %>%
+  mutate(Genus = ifelse(Genus == "Family.unknown.", 
+                           paste("Order.", as.character(Order), ".", sep=""), Genus))
+Tax2 <- Tax2 %>%
+  mutate(Genus = ifelse(Genus == "Order.unknown.", 
+                           paste("Class.", as.character(Class), ".", sep=""), Genus))
+Tax2 <- Tax2 %>%
+  mutate(Genus = ifelse(Genus == "Class.unknown.", 
+                           paste("Phylum.", as.character(Phylum), ".", sep=""), Genus))
+Tax2 <- Tax2 %>%
+  mutate(Genus = ifelse(Genus == "Phylum.unknown.", 
+                        paste("Kingdom.", as.character(Kingdom), ".", sep=""), Genus))
+
+#Assigning names to the phylum column
+##Put Phylum NA into an unknown category
+Tax2$Phylum <- as.character(Tax2$Phylum)
+Tax2$Phylum <- ifelse(is.na(Tax2$Phylum), "unknown", Tax2$Phylum)
+Tax2 <- Tax2 %>% ungroup() %>%
+  mutate(Phylum = ifelse(Phylum == "unknown", 
+                           paste("Kingdom.", as.character(Kingdom), ".", sep=""), Phylum))
+
+#Made unknown phyla into Kingdom.Bacteria. and Kingdom.unknown.
+table(Tax2$Phylum)
+#########################################################################################
+#Make feature table
+FeatureMic<-Tax2[,1:6]
+
+
+##Include for all selections on how to handle NA
+#Add Class as row names and keep numeric columns
+#rownames(Tax2) <- Tax2$Class
+Microbio<-data.frame(Tax2[,7:ncol(Tax2)], row.names = Tax2$Genus, 
+                     check.names=FALSE) #Change when having other taxonomy tables
+
+# Rename phenotypes
+Phe<-PhenoSub
+```
+
+### Functional prediction Picrust2
+See AdditionPRO_FUNCpicrust_210823 for generation of data, have to update according to new data
+```{r eval=FALSE}
+#FeaturePic2<-read.csv(file="../../Data/OtoMail210827/pathways/metacyc_categories.csv")
+#Pic2<-read.table(file="../../Data/path_abun_unstrat.tsv", header=TRUE)
+```
+
+### Remove unused datasets and objects
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic")))
+```
+
+
+### Compare sequencing runs
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic")))
+
+#Read in metadata from dada2 
+metabatch <- 
+  read_excel("./dada2/metadata.xlsx")
+
+metabatch$IDX <- paste("X", metabatch$sample_name, sep="")
+
+metac <- merge(Phe, metabatch, by="IDX")
+
+table(metac$seq_batch)
+
+i <- c("All")
+
+
+
+
+#Hellinger transformation
+Microbio2 <- data.frame(t(decostand(t(Microbio), method="hellinger")))
+#Maks TSS
+Microbio2<-sweep(Microbio2, 2, colSums(Microbio2), FUN="/")
+#Dissimilarity 
+distmatrix <- vegdist(t(Microbio2), method="bray")
+#Multi dimensional scaling with capscale 
+PCoAcsObject<-capscale(distmatrix~1)
+
+
+##Add eig to plot axes. with cmdscale there are negative values not with capscale
+eig <- PCoAcsObject$CA$eig
+# Calculate the variation explained by PCoA1, 2, 3 and 4
+# and use it to generate axis labels
+eig_1_2 <- eig[1:4] / sum(eig) * 100 #Vector with variance explained 
+#  by the first 4 axes
+eig_1 <- paste("PCoA1", round(eig_1_2[1], digits = 2), "% variance")
+eig_2 <- paste("PCoA2", round(eig_1_2[2], digits = 2), "% variance")
+eig_3 <- paste("PCoA3", round(eig_1_2[3], digits = 2), "% variance")
+eig_4 <- paste("PCoA4", round(eig_1_2[4], digits = 2), "% variance")
+
+##Pull out coordinates for plotting from the ca object
+#Structuring to add to metac
+PCoACA<-PCoAcsObject$CA #The ca object contains the actual ordination results: 
+#u ((Weighted) orthonormal site scores), 
+#v ((Weighted) orthonormal species scores) all na in mine (unconstrained), 
+#Xbar (The standardized data matrix after previous stages of analysis), 
+#and imaginary.u.eig ???. 
+#Info http://cc.oulu.fi/~jarioksa/softhelp/vegan/html/cca.object.html   
+PCoA<-as.data.frame(PCoACA$u)
+#Change colnames. Now add dis and trans info to names
+
+colnames(PCoA) <- paste("MDS", 1:length(PCoA), "BrayHel", sep="")
+#Add row names to df
+PCoA$IDX <- row.names(PCoA)
+#Merge according to Sample
+metac<-merge(metac, PCoA, by="IDX")
+
+
+metac$gly_stat<-as.factor(metac$gly_stat)
+metac$p_gq_smoke<-as.factor(metac$p_gq_smoke)
+
+# #PCoA MDS1 and MDS2 pdf
+# pdf(paste("ADDPRO_Microbio_glystat_PCoA", i, ".pdf", sep=""), width=9, height=6)
+# print(ggplot(metac) + 
+#   geom_point(aes(x=MDS1BrayHel, y=MDS2BrayHel, color = gly_stat, 
+#                  group = gly_stat), size=3) +
+#   stat_ellipse(aes(MDS1BrayHel, y=MDS2BrayHel, color = gly_stat, 
+#                    group = gly_stat)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# dev.off()
+# 
+# #PCoA MDS1 and MDS2 pdf 
+# pdf(paste("ADDPRO_Microbio_smoke_PCoA", i, ".pdf", sep=""), width=9, height=6)
+# print(ggplot(metac[!is.na(metac$p_gq_smoke),]) + #Removed the samples wNAs smoke
+#   geom_point(aes(x=MDS1BrayHel, y=MDS2BrayHel, color = p_gq_smoke, 
+#                  group = p_gq_smoke), size=3) +
+#   stat_ellipse(aes(MDS1BrayHel, y=MDS2BrayHel, color = p_gq_smoke, 
+#                    group = p_gq_smoke)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="p_gq_smoke", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# dev.off()
+# 
+# #coloring<-"p_gq_smoke" #Remember NAs are not plottet
+# coloring<-"gly_stat"
+# 
+# #PCoA MDS1 and MDS2 
+# print(ggplot(metac) + 
+#   geom_point(aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# 
+# #PCoA MDS1 and MDS3 
+# print(ggplot(metac) + 
+#   geom_point(aes_string(x="MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_3) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# 
+# #PCoA MDS2 and MDS3 
+# print(ggplot(metac) + 
+#   geom_point(aes_string(x="MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_2, y = eig_3) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+
+
+
+#coloring<-"p_gq_smoke" #Remember NAs are not plottet
+#coloring<-"gly_stat"
+coloring<-"seq_batch"
+
+# PC1 loadings
+#Line specifier
+metac$lines <-
+  ifelse(metac$IDX=="X10329" | metac$IDX=="X10329re", "re10329",
+         ifelse(metac$IDX=="X10585" | metac$IDX=="X10585re", "re10585",
+                ifelse(metac$IDX=="X10817" | metac$IDX=="X10817re", "re10817",
+                       NA)))
+
+#PC1 line coordinates
+metac$MDS1lines <-
+  ifelse(metac$IDX=="X10329" | metac$IDX=="X10585" | metac$IDX=="X10817" | 
+           metac$IDX=="X10329re" | metac$IDX=="X10585re" | metac$IDX=="X10817re",
+         metac$MDS1BrayHel, NA)
+
+#PC2 line coordinates
+metac$MDS2lines <-
+  ifelse(metac$IDX=="X10329" | metac$IDX=="X10585" | metac$IDX=="X10817" | 
+           metac$IDX=="X10329re" | metac$IDX=="X10585re" | metac$IDX=="X10817re",
+         metac$MDS2BrayHel, NA)
+
+##
+#PCoA MDS1 and MDS2 
+print(ggplot(metac) + 
+  geom_point(aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                 group = coloring), size=2) +
+  geom_line(aes_string(x="MDS1lines", y="MDS2lines", group="lines", na.rm=TRUE)) +
+  stat_ellipse(aes_string("MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                   group = coloring)) +
+  scale_color_manual(values=c("B120"="#0000FF","B666"="#FF0000")) +
+  ggtitle(paste("PCoA", i, sep=" ")) + 
+  labs(colour=coloring, x = eig_1, y = eig_2) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        axis.title=element_text(size=12), legend.position="bottom"))
+
+#Changed size
+print(ggplot(metac) + 
+  geom_point(aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                 group = coloring), size=1) +
+  geom_line(aes_string(x="MDS1lines", y="MDS2lines", group="lines", na.rm=TRUE), size=2) +
+  stat_ellipse(aes_string("MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                   group = coloring)) +
+  scale_color_manual(values=c("B120"="#0000FF","B666"="#FF0000")) +
+  ggtitle(paste("PCoA", i, sep=" ")) + 
+  labs(colour=coloring, x = eig_1, y = eig_2) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        axis.title=element_text(size=12), legend.position="bottom"))
+
+#PCoA MDS1 and MDS3 
+print(ggplot(metac) + 
+  geom_point(aes_string(x="MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+                 group = coloring), size=2) +
+  geom_line(aes_string(x="MDS1lines", y="MDS2lines", group="lines", na.rm=TRUE), size=2) +
+  stat_ellipse(aes_string("MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+                   group = coloring)) +
+  scale_color_manual(values=c("B120"="#0000FF","B666"="#FF0000")) +
+  ggtitle(paste("PCoA", i, sep=" ")) + 
+  labs(colour=coloring, x = eig_1, y = eig_2) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        axis.title=element_text(size=12), legend.position="bottom"))
+
+#PCoA MDS2 and MDS3 
+print(ggplot(metac) + 
+  geom_point(aes_string(x="MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+                 group = coloring), size=2) +
+  geom_line(aes_string(x="MDS1lines", y="MDS2lines", group="lines", na.rm=TRUE), size=2) +
+  stat_ellipse(aes_string("MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+                   group = coloring)) +
+  scale_color_manual(values=c("B120"="#0000FF","B666"="#FF0000")) +
+  ggtitle(paste("PCoA", i, sep=" ")) + 
+  labs(colour=coloring, x = eig_1, y = eig_2) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        axis.title=element_text(size=12), legend.position="bottom"))
+
+
+
+##PERMANOVA 
+#adonis can handle both continous and factor predictors 
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ seq_batch, metac, by="terms", 
+                      perm=99) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+#dist samples on both runs
+subset_dist2 <- function (d, keep) {return(as.dist(as.matrix(d)[keep, keep]))}
+both<-subset_dist2(distmatrix, c("X10329", "X10585", "X10817", "X10329re", "X10585re", "X10817re"))
+both
+
+#PCoA MDS1 and MDS2 
+pdf(paste("ADDPRO_Microbio_seqbatch_PCoA", i, ".pdf", sep=""), width=9, height=6)
+print(ggplot(metac) + 
+  geom_point(aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                 group = coloring), size=1) +
+  geom_line(aes_string(x="MDS1lines", y="MDS2lines", group="lines", na.rm=TRUE), size=2) +
+  stat_ellipse(aes_string("MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+                   group = coloring)) +
+  scale_color_manual(values=c("B120"="#0000FF","B666"="#FF0000")) +
+  ggtitle(paste("PCoA sequencing batch - PERMANOVA pvalue =", adonisObject$`Pr(>F)`, sep=" ")) + 
+  labs(colour=coloring, x = eig_1, y = eig_2) + 
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        axis.title=element_text(size=12), legend.position="bottom")) + 
+  geom_text(x=-0.034, y=-0.021, label="BC=0.010", size=2.5) + #X10329
+  geom_text(x=-0.028, y=-0.084, label="BC=0.011", size=2.5) + #X10585
+  geom_text(x=-0.089, y=0.056, label="BC=0.014", size=2.5) #X10817
+dev.off()
+
+#test<-metac[,c("IDX", "MDS1lines")] #X10817=-0.089, X10329=-0.034, X10585=-0.028
+```
+
+### Remove re samples 
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic")))
+
+Microbio <- dplyr::select(Microbio, -one_of(c("X10329re", "X10585re", "X10817re")))
+Phe<-subset(Phe, IDX %in% colnames(Microbio))                   
+                   
+```
+
+### Define phenotypes according to categorical categories
+The UA category is just to check if a nonsensical value is in the table U+2265
+```{r}
+Phe$sex_cat<-factor(ifelse(Phe$sex==1, "Male",
+                ifelse(Phe$sex==0, "Female", "NA")))
+table(Phe$sex_cat, useNA="always")
+##Don't have encoded p_gv_sex 0=women, 1=man, but in Phe have "sex", make sanity check.
+#boxplot(height ~ sex_cat, data = Phe, frame = FALSE)
+
+
+#Overweight
+##BMI – bmi: < 18.5, 18.5-24.9, 25-29.9, =>30
+Phe$BMI_cat<-factor(ifelse(Phe$bmi < 18.5, "Underweight",
+                              ifelse(18.5 <= Phe$bmi & Phe$bmi < 25, "Healthyweight",
+                                     ifelse(25 <= Phe$bmi & Phe$bmi < 30,  "Overweight", 
+                                            ifelse(Phe$bmi >= 30, "Obese", "UA")))))
+Phe$BMI_cat<-factor(Phe$BMI_cat, levels=c("Underweight", "Healthyweight", "Overweight", "Obese", "UA"))
+table(Phe$BMI_cat, useNA="always")
+##Fat percentage - Fat_pc: male =<25% og >25%,  female =<33% og >33% 
+Phe$Fat_cat<-as.character(ifelse(Phe$fat_pc <= 25 & Phe$sex == 1 | Phe$fat_pc <= 33 & Phe$sex == 0 , "Low",
+                              ifelse(Phe$fat_pc > 25 & Phe$sex == 1 | Phe$fat_pc > 33 & Phe$sex == 0 , "High",
+                              "UA")))
+table(Phe$Fat_cat, useNA="always")
+##Waist measurement - Waist_av: females <80cm, 80-88cm, >88cm, for males <94cm, 94-102cm, >102cm
+Phe$Waist_cat<-as.character(ifelse(Phe$waist_av < 80 & Phe$sex == 0 | Phe$waist_av < 94 & Phe$sex == 1 , "Low",
+                                   ifelse(Phe$waist_av <= 88 & Phe$waist_av >= 80 & Phe$sex == 0 | Phe$waist_av <= 102 & Phe$waist_av >= 94 & Phe$sex == 1 , "Medium",
+                                          ifelse(Phe$waist_av > 88 & Phe$sex == 0 | Phe$waist_av > 102 & Phe$sex == 1 , "High",
+                                                 "UA"))))
+Phe$Waist_cat<-factor(Phe$Waist_cat, levels=c("Low", "Medium", "High"))
+table(Phe$Waist_cat, useNA="always")
+##Waist to hip ratio - waist_av/hip_av: females <0.85cm og =>0.85cm, males <0.90cm og =>0.90cm
+Phe$whratio<-Phe$waist_av/Phe$hip_av
+#Phe$whratio
+Phe$whratio_cat<-as.character(ifelse(Phe$whratio <= 0.85 & Phe$sex == 0 | Phe$whratio <= 0.90 & Phe$sex == 1 , "Low",
+                              ifelse(Phe$whratio > 0.85 & Phe$sex == 0 | Phe$whratio > 0.90 & Phe$sex == 1 , "High",
+                              "UA")))
+table(Phe$whratio_cat, useNA="always")
+
+#Alcohol intake (should it be the same for males and females) 
+##Weekly alcohol intake - Sum (p_gq_beer_week+ p_gq_wine_week+ p_gq_liquour_week)
+  #Divided into 0 units/week, 1-10 units/week, >10 units/week
+Phe$Alcprweek <- Phe$p_gq_beer_week+Phe$p_gq_wine_week+Phe$p_gq_liquour_week
+sum(is.na(Phe$Alcprweek))
+#Phe$Alcprweek
+Phe$Alcprweek_cat <- as.character(ifelse(Phe$Alcprweek == 0, "Abstinence",
+                              ifelse(0 < Phe$Alcprweek & Phe$Alcprweek <= 10, "Moderate",
+                                     ifelse(Phe$Alcprweek > 10, "High", "UA"))))
+Phe$Alcprweek_cat<-factor(Phe$Alcprweek_cat, levels=c("Abstinence", "Moderate", "High"))
+table(Phe$Alcprweek_cat, useNA="always")
+
+#sex_cat
+##Smoking - p_gq_smoke: grouping as is 1, 2, 3
+#Some chunks uses as.factor(p_gq_smoke)
+table(Phe$p_gq_smoke, useNA="always")
+Phe$Smoking<-as.character(ifelse(Phe$p_gq_smoke==1, "Smoker",
+                              ifelse(Phe$p_gq_smoke==2, "Exsmoker",
+                                     ifelse(Phe$p_gq_smoke==3, 
+                                            "Nonsmoker", "UA"))))
+table(Phe$Smoking, useNA="always")
+
+
+#Cardiovascular 
+##Blodtryk – sbp_av/dbp_av: 
+#Lav = sbp <120 og dbp <80
+#Normal = sbp 120-139,9 og dpb 80-89,9
+#Mild = sbp =>140-159,9 og dbp =>90-99,9
+#Moderat-alvorlig = sbp =>160 og dbp =>100
+sum(is.na(Phe$sbp_av))
+sum(is.na(Phe$dbp_av))
+# Phe$bp_cat<-as.character(ifelse(Phe$sbp_av < 120  & Phe$dbp_av < 80, "Low",
+#                               ifelse(120 <= Phe$sbp_av & Phe$sbp_av < 140 & 80 <= Phe$dbp_av & Phe$dbp_av < 90, "Normal",
+#                                      ifelse(140 <= Phe$sbp_av & Phe$sbp_av < 160 & 90 <= Phe$dbp_av & Phe$dbp_av < 100,  "Mild_elevated", 
+#                                             ifelse(Phe$sbp_av >= 160 & Phe$dbp_av >= 100, "Moderate_severe", "UA")))))
+##New american heart association, also consider have 4 higher than 180
+#Normal = sbp <120 og dbp <80
+#Mild_elevated = sbp 120-129 og dbp <80 
+#Moderate_elevated = sbp 130-139 og dbp 80-89
+#Severely_elevated = sbp =>140 og dbp =>90
+Phe$bp_cat<-as.character(ifelse(Phe$sbp_av < 120  & Phe$dbp_av < 80, "Normal",
+                              ifelse(120 <= Phe$sbp_av & Phe$sbp_av < 130 & Phe$dbp_av < 80, "Mild_elevated",
+                                     ifelse(130 <= Phe$sbp_av & Phe$sbp_av < 140 | 80 <= Phe$dbp_av & Phe$dbp_av < 90,  "Moderate_elevated", 
+                                            ifelse(Phe$sbp_av >= 140 | Phe$dbp_av >= 90, "Severely_elevated", "UA")))))
+Phe$bp_cat<-factor(Phe$bp_cat, levels=c("Normal", "Mild_elevated", "Moderate_elevated", "Severely_elevated"))
+table(Phe$bp_cat, useNA="always")
+#sbp alone
+Phe$sbp_cat<-as.character(ifelse(Phe$sbp_av < 120, "Low",
+                              ifelse(120 <= Phe$sbp_av & Phe$sbp_av < 140, "Normal",
+                                     ifelse(140 <= Phe$sbp_av & Phe$sbp_av < 160,  "Mild_elevated", 
+                                            ifelse(Phe$sbp_av >= 160, "Moderate_severe", "UA")))))
+Phe$sbp_cat<-factor(Phe$sbp_cat, levels=c("Low", "Normal", "Mild_elevated", "Moderate_severe"))
+table(Phe$sbp_cat, useNA="always")
+#dbp alone
+Phe$dbp_cat<-as.character(ifelse(Phe$dbp_av < 80, "Low",
+                              ifelse(80 <= Phe$dbp_av & Phe$dbp_av < 90, "Normal",
+                                     ifelse(90 <= Phe$dbp_av & Phe$dbp_av < 100,  "Mild_elevated", 
+                                            ifelse(Phe$dbp_av >= 100, "Moderate_severe", "UA")))))
+Phe$dbp_cat<-factor(Phe$dbp_cat, levels=c("Low", "Normal", "Mild_elevated", "Moderate_severe"))
+table(Phe$dbp_cat, useNA="always")
+table(Phe$sbp_cat, Phe$dbp_cat, useNA="always")
+
+
+##Puls/heart rate – hr_av: females <70, 70-90, >90 and males <60, 60-80, >80 
+Phe$hr_cat<-as.character(ifelse(Phe$hr_av < 70 & Phe$sex == 0 | Phe$hr_av < 60 & Phe$sex == 1 , "Low",
+                                   ifelse(Phe$hr_av <= 90 & Phe$hr_av >= 70 & Phe$sex == 0 | Phe$hr_av <= 80 & Phe$hr_av >= 60 & Phe$sex == 1 , "Medium",
+                                          ifelse(Phe$hr_av > 90 & Phe$sex == 0 | Phe$hr_av > 80 & Phe$sex == 1 , "High",
+                                                 "UA"))))
+Phe$hr_cat<-factor(Phe$hr_cat, levels=c("Low", "Medium", "High"))
+table(Phe$hr_cat, useNA="always")
+##Pulspres - pp_av:  =<40 og <40
+Phe$pp_cat<-as.character(ifelse(Phe$pp_av <= 40, "Low",
+                              ifelse(Phe$pp_av > 40, "High",
+                              "UA")))
+table(Phe$pp_cat, useNA="always")
+##Triglycerider – p_lab_trig: <2 og =>2
+Phe$trig_cat<-as.character(ifelse(Phe$p_lab_trig < 2, "Low",
+                              ifelse(Phe$p_lab_trig >= 2, "High",
+                              "UA")))
+table(Phe$trig_cat, useNA="always")
+##HDL cholesterol – p_lab_hdlc: =<1 og >1
+Phe$hdlc_cat<-as.character(ifelse(Phe$p_lab_hdlc <= 1, "Low",
+                              ifelse(Phe$p_lab_hdlc > 1, "High",
+                              "UA")))
+table(Phe$hdlc_cat, useNA="always")
+##LDL cholesterol – p_lab_ldl: <3 og =>3
+Phe$ldlc_cat<-as.character(ifelse(Phe$p_lab_ldl < 3, "Low",
+                              ifelse(Phe$p_lab_ldl >= 3, "High",
+                              "UA")))
+table(Phe$ldlc_cat, useNA="always")
+##Total cholesterol - p_lab_chol: <5 og =>5
+Phe$chol_cat<-as.character(ifelse(Phe$p_lab_chol < 5, "Low",
+                              ifelse(Phe$p_lab_chol >= 5, "High",
+                              "UA")))
+table(Phe$chol_cat, useNA="always")
+#table(Phe$trig_cat, Phe$hdlc_cat, Phe$ldlc_cat, Phe$chol_cat)
+##Fysisk aktivitet – sum(p_rpaq_MODERATE + p_rpaq_VIGOR): <0,5, 0,5-1 >1 #Do we want to weight it?
+Phe$act<-Phe$p_rpaq_MODERATE + Phe$p_rpaq_VIGOR
+Phe$act_cat<-as.character(ifelse(Phe$act < 0.5, "Low",
+                              ifelse(0.5 <= Phe$act & Phe$act <= 1, "Medium",
+                                     ifelse(Phe$act > 1, "High", "UA"))))
+Phe$act_cat<-factor(Phe$act_cat, levels=c("Low", "Medium", "High"))
+table(Phe$act_cat, useNA="always")
+
+#Type 2 diabetes
+## Glycemia status – gly_stat: grouping as is
+#Some chunks uses as.factor(gly_stat)
+#See Pre-processing - Subset Pheno
+table(Phe$Glycaemia_Status, useNA="always")
+Phe$Risk<-factor(Phe$Risk, levels=c("Low", "High", "KDM", "unclass"))
+table(Phe$Risk, useNA="always")
+## HbA1c: <6, 6-6,4,=>6,5
+Phe$hba1c_cat<-as.character(ifelse(Phe$p_lab_hba1c < 6, "Low",
+                              ifelse(6 <= Phe$p_lab_hba1c & Phe$p_lab_hba1c < 6.5, "Medium",
+                                     ifelse(Phe$p_lab_hba1c >= 6.5, "High", "UA"))))
+Phe$hba1c_cat<-factor(Phe$hba1c_cat, levels=c("Low", "Medium", "High"))
+table(Phe$hba1c_cat, useNA="always")
+
+kable(data.frame(sex=sum(is.na(Phe$sex_cat)), 
+                 BMI=sum(is.na(Phe$BMI_cat)), 
+                 Fat=sum(is.na(Phe$Fat_cat)),
+                 Waist=sum(is.na(Phe$Waist_cat)),
+                 whratio=sum(is.na(Phe$whratio_cat)),
+                 Alc=sum(is.na(Phe$Alcprweek)),
+                 Smoke=sum(is.na(Phe$Smoking)),
+                 bp=sum(is.na(Phe$bp_cat)),
+                 sbp=sum(is.na(Phe$sbp_cat)),
+                 dbp=sum(is.na(Phe$dbp_cat)),
+                 heartrate=sum(is.na(Phe$hr_cat)),
+                 pulsepres=sum(is.na(Phe$pp_cat)),
+                 trig=sum(is.na(Phe$trig_cat)),
+                 hdlc=sum(is.na(Phe$hdlc_cat)),
+                 ldlc=sum(is.na(Phe$ldlc_cat)),
+                 chol=sum(is.na(Phe$chol_cat)),
+                 act=sum(is.na(Phe$act_cat)),
+                 Gly=sum(is.na(Phe$Glycaemia_Status)),
+                 Risk=sum(is.na(Phe$Risk)),
+                 hba1c=sum(is.na(Phe$hba1c_cat))))
+```
+
+
+
+## Analyses
+### Phenotype overview
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic")))
+
+#Scatterplots samlet
+pairs(Phe[,c(103,107:109)]) #Be aware of NA
+Phe$gly_stat<-as.factor(Phe$gly_stat)
+pairs(Phe[,107:109], 
+      pch = 21, 
+      bg=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", "4"="#FFD700", "5"="#800080")
+      [unclass(Phe$gly_stat)])
+
+#Scatterplots enkeltvis
+for (i in c("p_lab_insu0", "p_lab_insu30", "p_lab_insu120")) {
+  for (j in c("p_lab_insu0", "p_lab_insu30", "p_lab_insu120")) {
+    print(ggplot(Phe, aes_string(x=i, y=j, color="gly_stat")) +
+            geom_point() +
+            scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+                                        "4"="#FFD700", "5"="#800080"))+
+            theme_bw()) 
+  }
+}
+
+#Boxplots
+for (i in c("p_lab_insu0", "p_lab_insu30", "p_lab_insu120")) {
+  print(ggplot(Phe, aes_string(x="gly_stat", y=i, group="gly_stat")) +
+    geom_boxplot() +
+    theme_bw())
+}
+
+# pdf("ADDPRO_Phe_hist.pdf", width=12, height=6)
+# hist(Phe$p_lab_trig)
+# dev.off()
+
+  
+```
+
+### Model sample variables
+How to handle different clasess?  
+How to handle NA? 
+Can remove all negative to have direction is the positive. Thinking more about microbiome here  
+Sample data should be nondirectional. Using p-values
+
+##### Contingency tables
+```{r}
+head(Phe)
+
+summary(Phe)
+apply(Phe, MARGIN=2, class)
+
+#########################
+#Testing for loops
+mosaicplot(table(Phe$sex_cat, Phe$BMI_cat, useNA="always"))
+ggplot(data = Phe) +
+  geom_mosaic(aes(x = product(sex_cat, BMI_cat), fill=sex_cat)) 
+chisq.test(Phe$sex_cat, Phe$BMI_cat)
+#fisher.test(table(Phe$sex_cat, Phe$BMI_cat))
+
+mosaicplot(table(Phe$sex_cat, Phe$Fat_cat, useNA="always"))
+ggplot(data = Phe) +
+  geom_mosaic(aes(x = product(sex_cat, Fat_cat), fill=sex_cat))
+chisq.test(Phe$sex_cat, Phe$Fat_cat)
+#chisq.test(Phe$Fat_cat, Phe$sex_cat) #Get the same
+fisher.test(table(Phe$sex_cat, Phe$Fat_cat))
+
+mosaicplot(table(Phe$sex_cat, Phe$Smoking, useNA="always"))
+ggplot(data = Phe) +
+  geom_mosaic(aes(x = product(sex_cat, Smoking), fill=sex_cat))
+chisq.test(Phe$sex_cat, Phe$Smoking)
+#chisq.test(Phe$Fat_cat, Phe$sex_cat) #Get the same
+fisher.test(table(Phe$sex_cat, Phe$Smoking))
+
+#Phe2<-Phe[!(is.na(Phe$sex_cat)|is.na(Phe$Smoking)),]
+#chisq.test(Phe2$sex_cat, Phe2$Smoking) #get the same
+#########################
+
+
+links<-data.frame(matrix(ncol = 4, nrow = 0))
+colnames(links)<-c("from", "to", "pvalue", "sig")
+nodes<-data.frame(matrix(ncol = 3, nrow = 0))
+colnames(nodes)<-c("id", "name", "class")
+
+#Corresponding to var in following loops in script
+looper<-c("Risk", "sex_cat", "hba1c_cat",
+       "BMI_cat", "Waist_cat", "whratio_cat",
+       "Alcprweek_cat", "Smoking", "bp_cat",
+       "sbp_cat", "dbp_cat", "hr_cat",
+       "pp_cat", "trig_cat", "hdlc_cat",
+       "ldlc_cat", "chol_cat", "act_cat")
+
+# #Corresponding to var2 in following loops in script
+# looper<-c("Glycaemia_Status", "sex_cat",
+#        "BMI_cat", "Waist_cat", "whratio_cat", 
+#        "Smoking", "bp_cat",
+#        "sbp_cat", "dbp_cat", "hr_cat",
+#        "pp_cat", "trig_cat", "hdlc_cat",
+#        "ldlc_cat", "chol_cat", "act_cat", 
+#        "hba1c_cat")
+
+
+
+for (i in looper) {
+  nodes<-rbind(nodes, c(paste("s", match(i, names(Phe)), sep=""), i, class(Phe[,match(i, names(Phe))]) ) )
+  for (j in looper) {
+    #Consider adding subset of NAs, but chisq.test runs with NA and provides exactly same result
+    #Phe2<-Phe[!(is.na(Phe$Smoking)|is.na(Phe$Risk)),] #just example
+    #Phe2<-Phe[!(is.na(Phe[,match(i, names(Phe))])|is.na(Phe[,match(j, names(Phe))])),] #So if in either of them the row is subset
+    
+    #print(match(i, names(Phe)))
+    #print(match(j, names(Phe)))
+    #print(mosaicplot(table(Phe[,c(match(i, names(Phe)), match(j, names(Phe)))], useNA="always")))
+    cht<-chisq.test(Phe[,match(i, names(Phe))], Phe[,match(j, names(Phe))]) 
+    links<-rbind(links, c(paste("s", match(i, names(Phe)), sep=""), 
+                          paste("s", match(j, names(Phe)), sep=""), 
+                          as.numeric(ifelse(cht$p.value==0, 1e-16, cht$p.value)), 
+                          cht$p.value<0.05 ) )
+  }
+}
+colnames(nodes)<-c("id", "name", "class")
+colnames(links)<-c("from", "to", "pvalue", "sig")
+
+links$pvalue<-as.numeric(links$pvalue)
+
+#Consider getting values more close
+links$pvalclose<-ifelse(links$pvalue<1e-3, 1e-3, links$pvalue)
+#links$pvalclose<-as.numeric(links$pvalclose)
+
+###########
+#Heatmap
+links$mlog10pval<- (-log10(links$pvalue))
+links$mlog10pvalclose<- (-log10(links$pvalclose))
+net <- graph_from_data_frame(d=links, vertices=nodes, directed=F)
+#netm <- get.adjacency(net, attr="mlog10pval", sparse=F)
+netm <- get.adjacency(net, attr="mlog10pvalclose", sparse=F)
+heatmap(netm, Rowv = NA, Colv = NA, 
+        scale="none", margins=c(10,10) )
+
+library(pheatmap)
+pdf("ADDPRO_varheatmap.pdf", width=3.4, height=3)
+pheatmap(netm,
+         color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdYlBu")))(100),
+         margins=c(8,8),
+         treeheight_row = 50, 
+         treeheight_col = 50, 
+         cellwidth=4, 
+         cellheight=4,
+         fontsize_row=5,
+         fontsize_col=5
+)
+dev.off()
+
+detach('package:pheatmap')
+###########
+
+#Remove duplicate rows
+links<-links[links$from!=links$to,]
+
+#Remove reversed comparison
+
+
+#Consider removing non significant edges/links
+links<-filter(links, pvalue<0.1)
+
+#Make a column in links representing -log10(pvalue) 
+links$pvalue<-as.numeric(links$pvalue)
+links$pvalclose<-as.numeric(links$pvalclose)
+links$mlog10pval<- (-log10(links$pvalue))
+links$mlog10pvalclose<- (-log10(links$pvalclose))
+#links$scalemlog10pval<-links$mlog10pval/10
+
+
+detach('package:ggmosaic')
+```
+
+##### Correlation network of sample variables
+Inspired by https://kateto.net/network-visualization
+Ognyanova, K. (2021) Network visualization with R. Retrieved from www.kateto.net/network-visualization date: 05072022
+```{r}
+head(nodes) #First column id then information on nodes.
+head(links) #From (id) to (id) can also have information and size measure. 
+
+
+net <- graph_from_data_frame(d=links, vertices=nodes, directed=F) 
+
+
+# Examine the resulting object:
+class(net)
+net 
+
+# # We can access the nodes, edges, and their attributes:
+# E(net)
+# V(net)
+# E(net)$pvalue
+# E(net)$sig
+# V(net)$name
+# 
+# # Or find specific nodes and edges by attribute:
+# # (that returns objects of type vertex sequence / edge sequence)
+# V(net)[name=="sex_cat"]
+# E(net)[sig=="TRUE"]
+# 
+# 
+# # If you need them, you can extract an edge list 
+# # or a matrix back from the igraph networks.
+# as_edgelist(net, names=T)
+# as_adjacency_matrix(net, attr="pvalue")
+# 
+# # Or data frames describing nodes and edges:
+# as_data_frame(net, what="edges")
+# as_data_frame(net, what="vertices")
+# 
+# 
+# # You can also look at the network matrix directly:
+# net[1,]
+# net[1,3]
+# 
+# # First attempt to plot the graph:
+# plot(net) # not pretty!
+# 
+# #net <- simplify(net, remove.multiple = T, remove.loops = T) #also removes 
+# #plot(net)
+# 
+# # Generate colors based on node variable
+# colrs <- c("gray50", "tomato", "gold", "red")
+# V(net)$color <- colrs[V(net)$name] #Change to class when making other tests
+# V(net)$color <- c("gray50", "tomato", "gold", "red")
+# E(net)$width <- E(net)$mlog10pval 
+# 
+# set.seed(99)
+# plot(net, edge.curved=.1)
+
+
+# We can add node labels with geom_node_text() or geom_node_label():
+set.seed(99)
+ggraph(net,  layout = 'lgl') +
+  #geom_edge_arc(strength=0.3, width=1, aes(color = sig, width=mlog10pval)) +
+  geom_edge_arc(strength=0.3, aes(color = sig, width=mlog10pval)) +
+  scale_edge_width(range = c(0.2, 2)) +
+  geom_node_point(color="gray50", size = 2) +     
+  geom_node_text(aes(label = name), color="black", repel=T) +
+  theme_void()
+#ggsave("ADDPRO_varnetwork_cat.pdf")
+
+ggraph(net,  layout = 'linear') +
+  #geom_edge_arc(strength=0.3, width=1, aes(color = sig, width=mlog10pval)) +
+  geom_edge_arc(strength=0.3, aes(color = sig, width=mlog10pval)) +
+  scale_edge_width(range = c(0.2, 2)) +
+  geom_node_point(color="gray50", size = 2) +     
+  geom_node_text(aes(label = name), color="black", repel=T) +
+  theme_void()
+
+# ggraph(net,  layout = 'linear', circular=TRUE) +
+#   #geom_edge_arc(strength=0.3, width=1, aes(color = sig, width=mlog10pval)) +
+#   geom_edge_arc(strength=0.3, aes(color = sig, width=mlog10pvalclose)) +
+#   scale_edge_width(range = c(0.1, 1)) +
+#   geom_node_point(color="gray50", size = 2) +     
+#   geom_node_text(aes(label = name), color="black", repel=T) +
+#   theme_void()
+# ggsave("ADDPRO_varnetwork_cat_circular.pdf")
+```
+
+
+
+
+### Stacked bar charts and bubble plots
+Inspired by https://jkzorz.github.io/2019/06/05/stacked-bar-plots.html
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+
+#Phenotype selector
+selector<-c("gly_stat")
+
+##Implement aggregation to higher taxonomic rank
+#Changing names of low abundant to other
+Ninclude <- 10 
+#Most abundant organisms 
+Mostabun <- row.names(rankabundance(t(Microbio)))[1:Ninclude]
+#Add row names to df
+#Maks TSS
+Taxonomy2<-sweep(Microbio, 2, colSums(Microbio), FUN="/")
+#Taxonomy2<-Microbio
+
+Taxonomy2$TaxID <- row.names(Taxonomy2)
+Taxonomy2$TaxID2 <- 
+  ifelse(Taxonomy2$TaxID==Mostabun[1], Mostabun[1],
+         ifelse(Taxonomy2$TaxID==Mostabun[2], Mostabun[2],
+                ifelse(Taxonomy2$TaxID==Mostabun[3], Mostabun[3],
+                       ifelse(Taxonomy2$TaxID==Mostabun[4],
+                              Mostabun[4],
+                              ifelse(Taxonomy2$TaxID==Mostabun[5], 
+                                     Mostabun[5],
+                                     ifelse(Taxonomy2$TaxID==Mostabun[6],
+                                            Mostabun[6],
+                                            ifelse(Taxonomy2$TaxID==Mostabun[7],
+                                                   Mostabun[7],
+                                                   ifelse(Taxonomy2$TaxID==Mostabun[8], 
+                                                          Mostabun[8],
+                                                          ifelse(Taxonomy2$TaxID==
+                                                                   Mostabun[9], 
+                                                                 Mostabun[9],
+                                                                 ifelse(Taxonomy2$TaxID==
+                                                                          Mostabun[10], 
+                                                                        Mostabun[10], 
+                                                                        "other"))))))))))
+
+#Does not work
+#Taxonomy$TaxID2 <- 
+#  ifelse(for (i in Ninclude) {Taxonomy$TaxID==Mostabun[i], Mostabun[i]}, "other")
+
+
+##Then need to aggregate
+Taxonomy2<-Taxonomy2 %>% group_by(TaxID2) %>% 
+  summarise_if(is.numeric, funs(sum))
+#colSums(Taxonomy2[,2:length(Taxonomy2)])
+
+##Long format
+row.names(Taxonomy2)<-Taxonomy2$TaxID2
+Taxonomy2 <- data.frame(t(Taxonomy2))
+Taxonomy2<-Taxonomy2[-c(1), ] 
+#Add row names to df
+Taxonomy2$IDX <- row.names(Taxonomy2)
+##Select phenotypes
+Phe2<-Phe
+#table(Phe2$Smoking)
+Phe2<-dplyr::select(Phe2, one_of(c("IDX", selector)))
+Phe2<-merge(Phe2, Taxonomy2, by="IDX")
+Phe2<-dplyr::select(Phe2, -one_of(c("IDX")))
+
+Phe2 <- data.frame(sapply(Phe2, as.numeric))
+Phe2$gly_stat<-as.factor(Phe2$gly_stat)
+
+##If columns are factors have only got this manual conversion to work
+##Consequently these can also change
+#colnames(Phe2)
+##Phe2$Actinomyces<-as.numeric(levels(Phe2$Actinomyces)[Phe2$Actinomyces])
+#Phe2$Fusobacterium<-as.numeric(levels(Phe2$Fusobacterium)[Phe2$Fusobacterium])
+#Phe2$Haemophilus<-as.numeric(levels(Phe2$Haemophilus)[Phe2$Haemophilus])
+#Phe2$Leptotrichia<-as.numeric(levels(Phe2$Leptotrichia)[Phe2$Leptotrichia])
+#Phe2$Neisseria<-as.numeric(levels(Phe2$Neisseria)[Phe2$Neisseria])
+#Phe2$other<-as.numeric(levels(Phe2$other)[Phe2$other])
+#Phe2$Porphyromonas<-as.numeric(levels(Phe2$Porphyromonas)[Phe2$Porphyromonas])
+#Phe2$Prevotella<-as.numeric(levels(Phe2$Prevotella)[Phe2$Prevotella])
+#Phe2$Rothia<-as.numeric(levels(Phe2$Rothia)[Phe2$Rothia])
+#Phe2$Streptococcus<-as.numeric(levels(Phe2$Streptococcus)[Phe2$Streptococcus])
+#Phe2$Veillonella<-as.numeric(levels(Phe2$Veillonella)[Phe2$Veillonella])
+
+#rowSums(Phe2[, -1])
+Phe2<-aggregate(formula(paste(".", "~ ", selector)), Phe2, mean)
+#rowSums(Phe22[, -1])
+
+
+
+Phe2<-melt(Phe2, id=c(selector))
+#Phe2<-dplyr::select(Phe2, -one_of(c("IDX")))
+
+#define the colours to use in the figure
+colours = c( "#A54657",  "#582630", "#F7EE7F", "#4DAA57","#F1A66A","#F26157", 
+             "#F9ECCC", "#679289", "#33658A", "#F6AE2D","#86BBD8")
+
+#Define order of selector in plot
+##Smoking
+#Phe2$Smoking <- factor(Phe2$Smoking,levels=c("Nonsmoker", "Exsmoker", "Smoker", "UA"))
+##gly_stat
+#Don't need to define right order
+
+#make the plot!
+barp<-ggplot(Phe2, aes_string(x = selector, fill = "variable", y = "value")) + 
+    geom_bar(stat = "identity", colour = "black") + 
+    theme(axis.text.x = element_text(angle = 90, size = 14, colour = "black", vjust = 0.5, 
+                                     hjust = 1, face= "bold"), 
+    axis.title.y = element_text(size = 16, face = "bold"), 
+    legend.title = element_text(size = 16, face = "bold"), 
+    legend.text = element_text(size = 12, face = "bold", colour = "black"), 
+    axis.text.y = element_text(colour = "black", size = 12, face = "bold")) + 
+    scale_y_continuous(expand = c(0,0)) + 
+    labs(x = "", y = "Relative Abundance (%)", fill = "Genus") + 
+    scale_fill_manual(values = colours)
+
+barp    
+
+#ggsave("ADDPRO_Microbio_smoke_stackbarrel.pdf")
+#ggsave("ADDPRO_Microbio_glystat_stackbarrel.pdf")
+
+#Make bubble plot
+Phe2$value<-Phe2$value*100
+dotmax<-max(Phe2$value)+1
+bubp = ggplot(Phe2, aes_string(x = selector, fill = "Smoking", y = "variable")) + 
+  geom_point(aes(size = value, fill = variable), alpha = 0.75, shape = 21) + 
+  scale_size_continuous(limits = c(0.000001, dotmax), range = c(1,10), 
+                        breaks = c(1,3,9,18)) + 
+  labs( x= "", y = "", size = "Relative Abundance (%)", fill = "")  + 
+  theme(legend.key=element_blank(), 
+  axis.text.x = element_text(colour = "black", size = 12, face = "bold", angle = 90, 
+                             vjust = 0.3, hjust = 1), 
+  axis.text.y = element_text(colour = "black", face = "bold", size = 11), 
+  legend.text = element_text(size = 10, face ="bold", colour ="black"), 
+  legend.title = element_text(size = 12, face = "bold"), 
+  panel.background = element_blank(), panel.border = element_rect(colour = "black", 
+                                                                  fill = NA, size = 1.2), 
+  legend.position = "right") +  
+  scale_fill_manual(values = colours, guide = FALSE) + 
+  scale_y_discrete(limits = rev(levels(Phe2$variable))) 
+
+bubp
+#ggsave("ADDPRO_Microbio_smoke_bubbleperc.pdf")
+#ggsave("ADDPRO_Microbio_glystat_bubbleperc.pdf")
+```
+
+### Alpha diversity
+##### Microbiome
+```{r alpha diversity}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+#Calculate alpha diversity stats 
+#Use vegan to calculate various diversity and richness indices for each sample
+set.seed(1) 
+diversityCalc <- data.frame(Shannon=vegan::diversity(t(Microbio), index="shannon"), 
+                            Simpson=vegan::diversity(t(Microbio), index="simpson"), 
+                            invSimpson=vegan::diversity(t(Microbio), index="invsimpson"), 
+                            fisher=fisher.alpha(t(Microbio)), 
+                            #richness=specnumber(t(Microbio)),
+                            richness=specnumber(rrarefy(data.frame(t(Microbio)), 
+                                                        min(rowSums(t(Microbio))))),
+                            rarefy_min_count=rarefy(t(Microbio), 
+                                                    sample=min(rowSums(t(Microbio)))),
+                            chao1=estimateR(t(Microbio))["S.chao1",],
+                            chao1SE=estimateR(t(Microbio))["se.chao1",],
+                            ShannonRar=vegan::diversity(rrarefy(data.frame(t(Microbio)), 
+                                                         min(rowSums(t(Microbio)))),
+                                                 index="shannon"),
+                            SimpsonRar=vegan::diversity(rrarefy(data.frame(t(Microbio)), 
+                                                         min(rowSums(t(Microbio)))), 
+                                                 index="simpson"),
+                            invSimpsonRar=vegan::diversity(rrarefy(data.frame(t(Microbio)),
+                                                            min(rowSums(t(Microbio)))),
+                                                    index="invsimpson"),
+                            #Pielou=vegan::diversity(t(Microbio))/log(specnumber(t(Microbio))))
+                            Pielou=vegan::diversity(rrarefy(data.frame(t(Microbio)), 
+                                                        min(rowSums(t(Microbio)))))/
+                              log(specnumber(rrarefy(data.frame(t(Microbio)), 
+                                                     min(rowSums(t(Microbio)))))))
+#Merge with Phe.
+diversityCalc<-add_rownames(diversityCalc, "IDX")
+Phe2 <- merge(Phe, diversityCalc, by="IDX")
+
+
+# #Create a list to hold the plot objects.
+AlphaList <- list()
+# #Create vector to loop
+# AlphaDiv<-c("fisher", "Shannon", "Simpson", "invSimpson", "richness", "chao1", 
+#             "ShannonRar", "SimpsonRar", "invSimpsonRar", "Pielou")
+# #Plot
+# for (i in AlphaDiv) {
+# #Create plot name
+# pltName <- paste('Alpha', i, sep = '')
+# #create boxplots
+# AlphaList[[ pltName ]]<- 
+# ggplot(Phe2, aes_string(x="gly_stat", y=i, group="gly_stat")) +
+#     geom_violin(aes(fill=gly_stat, trim=FALSE)) + 
+#     stat_summary(fun.data="mean_sdl", 
+#                  mult=1, #mean plus minus a constant (mult=1) times the st.dev 
+#                  geom="pointrange", 
+#                  width=0.2 ) +
+#     #stat_summary(fun.y = mean, geom = "point") +
+#     #facet_grid(. ~ Metformin, scales="fixed") + #Scales can also be "free"
+#     #ggtitle(paste("Genus", i, sep=" ")) + 
+#     #xlab("gly_stat") + 
+#     ylab(paste(i)) + 
+#     scale_fill_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) + 
+#     theme_bw() + 
+#     theme(legend.position="none", panel.grid.major = element_blank(), 
+#           panel.grid.minor = element_blank(), axis.title=element_text(size=20),
+#           axis.title.x = element_blank(), 
+#           axis.text.x = element_text(angle = 45, hjust = 1, size=16),
+#           axis.text.y = element_text(angle = 45, hjust = 1, size=12))
+# }
+# 
+# 
+# #Have the plots stored in lists
+# lay <- rbind(c(1,2,3))
+# pdf(paste("ADDPRO_Microbio_Alpha", ".pdf", sep=""), width=12, height=6)
+# grid.arrange(AlphaList$Alpharichness, 
+#              AlphaList$AlphaPielou, AlphaList$AlphaShannon, layout_matrix = lay)
+# dev.off()
+# 
+# grid.arrange(AlphaList$Alpharichness, 
+#              AlphaList$AlphaPielou, AlphaList$AlphaShannon, layout_matrix = lay)
+# 
+# 
+# #Kruskal test 
+# kruskal.test(richness ~ gly_stat, data=Phe2)
+# kruskal.test(Pielou ~ gly_stat, data=Phe2)
+# kruskal.test(Shannon ~ gly_stat, data=Phe2)
+# #If significant Mann-Whitney pairwise post-test 
+# pairwise.wilcox.test(Phe2$richness, Phe2$gly_stat, 
+#                      p.adjust.method="bonferroni")
+# pairwise.wilcox.test(Phe2$Pielou, Phe2$gly_stat, 
+#                      p.adjust.method="bonferroni")
+# pairwise.wilcox.test(Phe2$Shannon, Phe2$gly_stat, 
+#                      p.adjust.method="bonferroni")
+
+
+
+############## New ####################
+##For all variables
+#readRDS("dada2/phyloseq.RDS") -> ps
+#ps
+#sample_data(ps)<-cbind(sample_data(ps),
+#                       estimate_richness(ps,
+#                                         measures=c("Observed", "Chao1", "ACE", "Shannon", "Simpson", "InvSimpson")))
+#alpha<-data.frame(sample_data(ps))
+##Add row names to df
+#alpha$IDX <- paste("X", row.names(alpha), sep="")
+##Merge according to Sample
+#alpha<-merge(Phe2, alpha, by="IDX")
+
+var<-c("Risk", "gly_stat", "sex_cat",
+       "BMI_cat", "Waist_cat", "whratio_cat",
+       "Alcprweek_cat", "Smoking", "bp_cat",
+       "sbp_cat", "dbp_cat", "hr_cat",
+       "pp_cat", "trig_cat", "hdlc_cat",
+       "ldlc_cat", "chol_cat", "act_cat", 
+       "Glycaemia_Status", "hba1c_cat")
+
+#Plot
+for (i in var) {
+#Create plot name
+pltName <- paste('Alpharichness', i, sep = '')
+#create boxplots
+AlphaList[[ pltName ]]<- ggplot(Phe2, aes_string(x=i, y="richness", group=i, color=i, fill=i)) +
+    geom_violin() + 
+    stat_summary(fun.data="mean_sdl", 
+                 mult=1, #mean plus minus a constant (mult=1) times the st.dev 
+                 geom="pointrange", 
+                 width=0.2 ) +
+    stat_summary(fun.y = mean, geom = "point") +
+    stat_compare_means(method="anova") +
+    ggtitle("Richness") + 
+    ylab(paste(i)) + 
+    scale_color_brewer(palette="Dark2") +
+    theme_bw() + 
+    theme(legend.position="none", panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(), axis.title=element_text(size=20),
+          axis.title.x = element_blank(), 
+          axis.text.x = element_text(angle = 45, hjust = 1, size=16),
+          axis.text.y = element_text(angle = 45, hjust = 1, size=12))
+
+print(ggplot(Phe2, aes_string(x=i, y="richness", group=i, color=i, fill=i)) +
+    geom_violin() + 
+    stat_summary(fun.data="mean_sdl", 
+                 mult=1, #mean plus minus a constant (mult=1) times the st.dev 
+                 geom="pointrange", 
+                 width=0.2 ) +
+    stat_summary(fun.y = mean, geom = "point") +
+    stat_compare_means(method="anova") +
+    #ggtitle(i) + 
+    ylab(paste(i)) + 
+    scale_color_brewer(palette="Dark2") +
+    theme_bw() + 
+    theme(legend.position="none", panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(), axis.title=element_text(size=20),
+          axis.title.x = element_blank(), 
+          axis.text.x = element_text(angle = 45, hjust = 1, size=16),
+          axis.text.y = element_text(angle = 45, hjust = 1, size=12)))
+
+
+print(kruskal.test(formula(paste("richness ~", i)), data=Phe2))
+print(pairwise.wilcox.test(Phe2$richness, Phe2[,which( colnames(Phe2) %in% i )], 
+                      p.adjust.method="bonferroni")) #If variable binary result same as kruskal
+}
+
+
+for (i in var) {
+#Create plot name
+pltName <- paste('AlphaShannon', i, sep = '')
+#create boxplots
+AlphaList[[ pltName ]]<- ggplot(Phe2, aes_string(x=i, y="Shannon", group=i, color=i, fill=i)) +
+    geom_violin() + 
+    stat_summary(fun.data="mean_sdl", 
+                 mult=1, #mean plus minus a constant (mult=1) times the st.dev 
+                 geom="pointrange", 
+                 width=0.2 ) +
+    stat_summary(fun.y = mean, geom = "point") +
+    stat_compare_means(method="anova") +
+    ggtitle("Shannon") + 
+    ylab(paste(i)) + 
+    scale_color_brewer(palette="Dark2") +
+    theme_bw() + 
+    theme(legend.position="none", panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(), axis.title=element_text(size=20),
+          axis.title.x = element_blank(), 
+          axis.text.x = element_text(angle = 45, hjust = 1, size=16),
+          axis.text.y = element_text(angle = 45, hjust = 1, size=12))
+print(ggplot(Phe2, aes_string(x=i, y="Shannon", group=i, color=i, fill=i)) +
+    geom_violin() + 
+    stat_summary(fun.data="mean_sdl", 
+                 mult=1, #mean plus minus a constant (mult=1) times the st.dev 
+                 geom="pointrange", 
+                 width=0.2 ) +
+    stat_summary(fun.y = mean, geom = "point") +
+    stat_compare_means(method="anova") +
+    #ggtitle(i) + 
+    ylab(paste(i)) + 
+    scale_color_brewer(palette="Dark2") +
+    theme_bw() + 
+    theme(legend.position="none", panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(), axis.title=element_text(size=20),
+          axis.title.x = element_blank(), 
+          axis.text.x = element_text(angle = 45, hjust = 1, size=16),
+          axis.text.y = element_text(angle = 45, hjust = 1, size=12)))
+
+print(kruskal.test(formula(paste("Shannon ~", i)), data=Phe2))
+print(pairwise.wilcox.test(Phe2$Shannon, Phe2[,which( colnames(Phe2) %in% i )], 
+                      p.adjust.method="bonferroni")) #If variable binary result same as kruskal
+}
+
+
+#Have the plots stored in list
+lay <- rbind(c(1,2),
+             c(3,4),
+             c(5,6),
+             c(7,8),
+             c(9,10),
+             c(11,12))
+
+
+pdf(paste("ADDPRO_alpha_main.pdf", sep=""), width=15, height=30)
+grid.arrange(AlphaList$AlpharichnessRisk,
+             AlphaList$AlphaShannonRisk,
+             AlphaList$AlpharichnessSmoking,
+             AlphaList$AlphaShannonSmoking,
+             AlphaList$Alpharichnesssex_cat,
+             AlphaList$AlphaShannonsex_cat,
+             AlphaList$AlpharichnessAlcprweek_cat,
+             AlphaList$AlphaShannonAlcprweek_cat,
+             AlphaList$Alpharichnesshba1c_cat,
+             AlphaList$AlphaShannonhba1c_cat,
+             AlphaList$Alpharichnessact_cat,
+             AlphaList$AlphaShannonact_cat, layout_matrix = lay)   
+dev.off() 
+
+
+
+#Have the plots stored in list
+lay <- rbind(c(1,2),
+             c(3,4),
+             c(5,6),
+             c(7,8),
+             c(9,10),
+             c(11,12),
+             c(13,14),
+             c(15,16),
+             c(17,18),
+             c(19,20),
+             c(21,22),
+             c(23,24))
+
+
+pdf(paste("ADDPRO_alpha_secondary.pdf", sep=""), width=15, height=60)
+grid.arrange(AlphaList$AlpharichnessBMI_cat,
+             AlphaList$AlphaShannonBMI_cat,
+             AlphaList$AlpharichnessWaist_cat,
+             AlphaList$AlphaShannonWaist_cat,
+             AlphaList$Alpharichnesswhratio_cat,
+             AlphaList$AlphaShannonwhratio_cat,
+             AlphaList$Alpharichnessbp_cat,
+             AlphaList$AlphaShannonbp_cat,
+             AlphaList$Alpharichnesssbp_cat,
+             AlphaList$AlphaShannonsbp_cat,
+             AlphaList$Alpharichnessdbp_cat,
+             AlphaList$AlphaShannondbp_cat,
+             AlphaList$Alpharichnesshr_cat,
+             AlphaList$AlphaShannonhr_cat,
+             AlphaList$Alpharichnesspp_cat,
+             AlphaList$AlphaShannonpp_cat,
+             AlphaList$Alpharichnesstrig_cat,
+             AlphaList$AlphaShannontrig_cat,
+             AlphaList$Alpharichnesshdlc_cat,
+             AlphaList$AlphaShannonhdlc_cat,
+             AlphaList$Alpharichnessldlc_cat,
+             AlphaList$AlphaShannonldlc_cat,
+             AlphaList$Alpharichnesschol_cat,
+             AlphaList$AlphaShannonchol_cat, layout_matrix = lay)   
+dev.off() 
+
+
+
+
+``` 
+
+
+
+
+### PCoA, rabuplot and PERMANOVA 
+##### Microbiome in loop 
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+
+i <- c("All")
+Phe2 <- Phe
+
+#Hellinger transformation
+Microbio2 <- data.frame(t(decostand(t(Microbio), method="hellinger")))
+#Maks TSS
+Microbio2<-sweep(Microbio2, 2, colSums(Microbio2), FUN="/")
+#Dissimilarity 
+distmatrix <- vegdist(t(Microbio2), method="bray")
+
+#####New######
+# #save dist matrix for Evelina
+# test<-as.matrix(distmatrix)
+# write.table(test, file="ADDPRO_Evelina_HelTSSBray.txt")
+# #test2<-read.table("ADDPRO_Evelina_HelTSSBray.txt", header=TRUE, row.names=1)
+
+#Multi dimensional scaling with capscale 
+PCoAcsObject<-capscale(distmatrix~1)
+
+
+##Add eig to plot axes. with cmdscale there are negative values not with capscale
+eig <- PCoAcsObject$CA$eig
+# Calculate the variation explained by PCoA1, 2, 3 and 4
+# and use it to generate axis labels
+eig_1_2 <- eig[1:4] / sum(eig) * 100 #Vector with variance explained 
+#  by the first 4 axes
+eig_1 <- paste("PCoA1", round(eig_1_2[1], digits = 2), "% variance")
+eig_2 <- paste("PCoA2", round(eig_1_2[2], digits = 2), "% variance")
+eig_3 <- paste("PCoA3", round(eig_1_2[3], digits = 2), "% variance")
+eig_4 <- paste("PCoA4", round(eig_1_2[4], digits = 2), "% variance")
+
+##Pull out coordinates for plotting from the ca object
+#Structuring to add to Phe2
+PCoACA<-PCoAcsObject$CA #The ca object contains the actual ordination results: 
+#u ((Weighted) orthonormal site scores), 
+#v ((Weighted) orthonormal species scores) all na in mine (unconstrained), 
+#Xbar (The standardized data matrix after previous stages of analysis), 
+#and imaginary.u.eig ???. 
+#Info http://cc.oulu.fi/~jarioksa/softhelp/vegan/html/cca.object.html   
+PCoA<-as.data.frame(PCoACA$u)
+#Change colnames. Now add dis and trans info to names
+
+colnames(PCoA) <- paste("MDS", 1:length(PCoA), "BrayHel", sep="")
+#Add row names to df
+PCoA$IDX <- row.names(PCoA)
+#Merge according to Sample
+Phe2<-merge(Phe2, PCoA, by="IDX")
+
+
+Phe2$gly_stat<-as.factor(Phe2$gly_stat)
+Phe2$p_gq_smoke<-as.factor(Phe2$p_gq_smoke)
+
+# #PCoA MDS1 and MDS2 pdf
+# pdf(paste("ADDPRO_Microbio_glystat_PCoA", i, ".pdf", sep=""), width=9, height=6)
+# print(ggplot(Phe2) + 
+#   geom_point(aes(x=MDS1BrayHel, y=MDS2BrayHel, color = gly_stat, 
+#                  group = gly_stat), size=3) +
+#   stat_ellipse(aes(MDS1BrayHel, y=MDS2BrayHel, color = gly_stat, 
+#                    group = gly_stat)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# dev.off()
+# 
+# #PCoA MDS1 and MDS2 pdf 
+# pdf(paste("ADDPRO_Microbio_smoke_PCoA", i, ".pdf", sep=""), width=9, height=6)
+# print(ggplot(Phe2[!is.na(Phe2$p_gq_smoke),]) + #Removed the samples wNAs smoke
+#   geom_point(aes(x=MDS1BrayHel, y=MDS2BrayHel, color = p_gq_smoke, 
+#                  group = p_gq_smoke), size=3) +
+#   stat_ellipse(aes(MDS1BrayHel, y=MDS2BrayHel, color = p_gq_smoke, 
+#                    group = p_gq_smoke)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="p_gq_smoke", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# dev.off()
+# 
+# #coloring<-"p_gq_smoke" #Remember NAs are not plottet
+# coloring<-"gly_stat"
+# 
+# #PCoA MDS1 and MDS2 
+# print(ggplot(Phe2) + 
+#   geom_point(aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS1BrayHel", y="MDS2BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_2) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# 
+# #PCoA MDS1 and MDS3 
+# print(ggplot(Phe2) + 
+#   geom_point(aes_string(x="MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS1BrayHel", y="MDS3BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_1, y = eig_3) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# 
+# #PCoA MDS2 and MDS3 
+# print(ggplot(Phe2) + 
+#   geom_point(aes_string(x="MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+#                  group = coloring), size=3) +
+#   stat_ellipse(aes_string("MDS2BrayHel", y="MDS3BrayHel", color = coloring, 
+#                    group = coloring)) +
+#   scale_color_manual(values=c("1"="#0000FF","2"="#FF0000", "3"="#228B22", 
+#                                "4"="#FFD700", "5"="#800080")) +
+#   ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="gly_stat", x = eig_2, y = eig_3) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=12), legend.position="bottom"))
+# 
+# 
+# 
+# 
+# #PCoA MDS1 and MDS2 pdf to poster Risk
+# png(paste("ADDPROposter_Microbio_risk_PCoA", i, ".png", sep=""), width=1350, height=900)
+# print(ggplot(Phe2) + 
+#   geom_point(aes(x=MDS1BrayHel, y=MDS2BrayHel, color = Risk, 
+#                  group = Risk), size=5) +
+#   stat_ellipse(aes(MDS1BrayHel, y=MDS2BrayHel, color = Risk, 
+#                    group = Risk)) +
+#   scale_color_manual(values=c(Low="#0000FF",High="#FF0000")) +
+#   #ggtitle(paste("PCoA", i, sep=" ")) + 
+#   labs(colour="Risk", x = eig_1, y = eig_2, size=30) + 
+#   theme_bw() + 
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+#         axis.title=element_text(size=30), legend.position="bottom",
+#         axis.text=element_text(size=24), legend.text=element_text(size=24),
+#         legend.title=element_text(size=30)))
+# dev.off()
+
+
+
+##NEW beta-diversity##
+PCoAlist<-list()
+adonislist<-list()
+Rabulist<-list()
+var<-c("Risk", "gly_stat", "sex_cat",
+       "BMI_cat", "Waist_cat", "whratio_cat",
+       "Alcprweek_cat", "Smoking", "bp_cat",
+       "sbp_cat", "dbp_cat", "hr_cat",
+       "pp_cat", "trig_cat", "hdlc_cat",
+       "ldlc_cat", "chol_cat", "act_cat", 
+       "Glycaemia_Status", "hba1c_cat")
+
+
+##Some massaging to perform rabuplot
+readRDS("dada2/phyloseq.RDS") -> ps
+#The rownames must match the sample names in the otu_table if you plan to combine them as a phyloseq-object
+
+rownames(Phe2)<-gsub("X", "", Phe2$IDX)
+ps2<-prune_samples(rownames(Phe2), ps)
+#colnames(otu_table(ps2))==rownames(Phe2)
+sample_data(ps2)<-Phe2
+
+#Make ps2 according to DAtest. PCoA and PERMANOVA on all genera
+ps2<-tax_glom(ps2, "Genus")
+ps2<-filter_phy(ps2, abundance=0, prevalence=20)
+ps2
+
+
+for (i in var) {
+  print(i)
+  plotvar<-ggplot(Phe2, aes_string(x="MDS1BrayHel", y="MDS2BrayHel", color = i, group=i), size=5) +
+    geom_point() +
+    stat_ellipse() +
+    ggtitle(i) +
+    labs(x = eig_1, y = eig_2, size=30) +
+    theme_bw() #+
+    #theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+    #      axis.title=element_text(size=30), legend.position="bottom",
+    #      axis.text=element_text(size=24), legend.text=element_text(size=24),
+    #      legend.title=element_text(size=30))
+  PCoAlist[[i]] <- plotvar
+  print(plotvar)
+
+  #Remove NAs for adonis
+  #Only includes rows without NAs from the i'th column
+  Phe3<-Phe2[complete.cases(Phe2[,which( colnames(Phe2)==i )]),]
+  #Also subset columns
+  Microbio3<-dplyr::select(Microbio, one_of(Phe3$IDX))
+  #Hellinger transformation
+  Microbio3 <- data.frame(t(decostand(t(Microbio3), method="hellinger")))
+  #Maks TSS
+  Microbio3<-sweep(Microbio3, 2, colSums(Microbio3), FUN="/")
+  #Dissimilarity
+  distmatrix <- vegdist(t(Microbio3), method="bray")
+  set.seed(1)
+  adonisObject<-adonis2(formula(paste("distmatrix ~ ", i)), Phe3, by="terms",
+                        perm=99) #, perm=99 can increase to get exact p-values
+  adonislist[[i]]<-adonisObject
+  print(adonisObject) #If significant then difference between groups
+  
+  #Stats are non-parametric
+  print(rabuplot(ps2, i, p_adjust=T, N_taxa=20, p_adjust_full=T))
+  Rabulist[[i]] <- rabuplot(ps2, i, p_adjust=T, N_taxa=20)
+  print(rabuplot(ps2, i, p_adjust=T, N_taxa=500, Only_sig=T, p_adjust_full=T))
+  Rabulist[[paste("Sig", i, sep="")]] <- rabuplot(ps2, i, p_adjust=T, N_taxa=500, Only_sig=T)
+  if (i=="Smoking") {
+      print(rabuplot(ps2, i, p_adjust=T, N_taxa=30, Only_sig=T, p_adjust_full=T))
+      Rabulist[[paste("Sigmod", i, sep="")]] <- rabuplot(ps2, i, p_adjust=T, N_taxa=30, Only_sig=T)
+  }
+  #test<-rabuplot(ps2, i, p_adjust=T, N_taxa=30, Only_sig=T)
+  print(rabuplot(ps2, i, N_taxa=10, bar_chart=TRUE, bar_chart_stacked=FALSE, percent=TRUE))
+  #Rabulist[[paste("Barpercent", i, sep="")]] <- rabuplot(ps2, i, N_taxa=10, bar_chart=TRUE, bar_chart_stacked=FALSE, percent=TRUE)
+  
+  ##Stats are metagenomeseq as assessed in DAtest 
+  #print(rabuplot(ps2, i, p_adjust=T, N_taxa=10, stats="mgs_feature", p_adjust_full=T))
+  #print(rabuplot(ps2, i, p_adjust=T, N_taxa=500, stats="mgs_feature", Only_sig=T, p_adjust_full=T))
+  
+  print(rabuplot(ps2, i, N_taxa=20, bar_chart_stacked=TRUE))
+  Rabulist[[paste("Bar", i, sep="")]] <- rabuplot(ps2, i, N_taxa=20, bar_chart_stacked=TRUE)
+  
+}
+
+# ###########Investigating rabuplot mgs_feature
+# var<-c("Risk", "gly_stat",
+#        "BMI_cat", "Waist_cat",
+#        "Alcprweek_cat", "Smoking", "bp_cat",
+#        "sbp_cat", "dbp_cat", "hr_cat",
+#        "hdlc_cat",
+#        "ldlc_cat", "chol_cat", "act_cat", 
+#        "Glycaemia_Status", "hba1c_cat")
+# #Variables sex_cat, whratio_cat, pp_cat, trig_cat with "Error in mgsfit$taxa : $ operator not defined for this S4 class"
+# table(Phe3$whratio_cat, useNA="always")
+# for (i in var) {
+#   ##Stats are metagenomeseq as assessed in DAtest 
+#   print(rabuplot(ps2, i, p_adjust=T, N_taxa=10, stats="mgs_feature", p_adjust_full=T))
+#   print(rabuplot(ps2, i, p_adjust=T, N_taxa=500, stats="mgs_feature", Only_sig=T, p_adjust_full=T))
+# }
+# rabuplot(ps2, "hdlc_cat", p_adjust=T, N_taxa=10, stats="mgs_feature")
+# rabuplot(ps2, "Risk", p_adjust=T, N_taxa=10, stats="mgs_feature")
+# class(Phe2$hdlc_cat)
+# class(Phe2$Risk)
+# table(Phe2$Risk, useNA="always")
+# ##########################################
+
+
+#PCoAlist$Risk
+#PCoAlist$gly_stat
+#adonislist$Risk
+#adonislist$gly_stat
+
+
+#Remove NAs for adonis
+var2<-c("Glycaemia_Status", "sex_cat",
+       "BMI_cat", "Waist_cat", "whratio_cat", 
+       "Smoking", "bp_cat",
+       "sbp_cat", "dbp_cat", "hr_cat",
+       "pp_cat", "trig_cat", "hdlc_cat",
+       "ldlc_cat", "chol_cat", "act_cat", 
+       "hba1c_cat", "Risk", "bmi", "waist_av", 
+       "whratio", "bp_av", "sbp_av", "dbp_av", 
+       "hr_av", "pp_av", "p_lab_trig", "p_lab_chol", 
+       "p_lab_hdlc","p_lab_ldlc", "p_lab_hba1c", "act_cat", 
+       "Alcprweek_cat", "Alcprweek", "age_fup")
+#Only includes rows without NAs from across the var columns
+Phe3<-Phe2[complete.cases(Phe2[,which( colnames(Phe2)%in%var2 )]),] 
+  #var2=692 var=599 samples includes alc
+#Also subset columns
+Microbio3<-dplyr::select(Microbio, one_of(Phe3$IDX)) 
+#Hellinger transformation
+Microbio3 <- data.frame(t(decostand(t(Microbio3), method="hellinger")))
+#Maks TSS
+Microbio3<-sweep(Microbio3, 2, colSums(Microbio3), FUN="/")
+#Dissimilarity 
+distmatrix <- vegdist(t(Microbio3), method="bray")
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ Risk + sex_cat + BMI_cat + Waist_cat + whratio_cat + Smoking + bp_cat + sbp_cat + dbp_cat + hr_cat + pp_cat + trig_cat + hdlc_cat + ldlc_cat + chol_cat + act_cat + Alcprweek_cat + hba1c_cat + age_fup, Phe3, by="margin",
+                      perm=99) #, perm=99 can increase to get exact p-values
+i<-"all"
+adonislist[[i]]<-adonisObject
+print(adonisObject) 
+
+#Significant in individual test
+adonisObject<-adonis2(distmatrix ~ Risk + sex_cat + Smoking + hba1c_cat + Alcprweek_cat + act_cat, Phe3, by="margin",
+                      perm=99)
+i<-"allsig"
+adonislist[[i]]<-adonisObject
+print(adonisObject)
+
+#adonisObject<-adonis2(distmatrix ~ Glycaemia_Status * sex_cat * BMI_cat * Smoking * sbp_cat * hba1c_cat, Phe3, by="margin",
+#                      perm=99)
+#i<-"allsigint"
+#adonislist[[i]]<-adonisObject
+#print(adonisObject)
+
+
+
+
+
+# #Have the plots stored in list
+lay <- rbind(c(1,2),
+             c(3,4),
+             c(5,6))
+
+pdf(paste("ADDPRO_PCoA_main.pdf", sep=""), width=13, height=13)
+grid.arrange(PCoAlist$Risk,
+             PCoAlist$Smoking,
+             PCoAlist$sex_cat,
+             PCoAlist$Alcprweek_cat,
+             PCoAlist$hba1c_cat,
+             PCoAlist$act_cat, layout_matrix = lay)
+dev.off()
+
+pdf(paste("ADDPRO_Stackbar_main.pdf", sep=""), width=16, height=16)
+grid.arrange(Rabulist$BarRisk+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$BarSmoking+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barsex_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$BarAlcprweek_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barhba1c_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Baract_cat+theme(axis.text.x = element_text(angle = -20)), layout_matrix = lay)
+dev.off()
+
+pdf(paste("ADDPRO_Rabu_main1of2.pdf", sep=""), width=16, height=16)
+grid.arrange(Rabulist$Risk,
+             Rabulist$SigRisk,
+             Rabulist$Smoking,
+             Rabulist$SigmodSmoking,
+             Rabulist$sex_cat,
+             Rabulist$Sigsex_cat, layout_matrix = lay)
+dev.off()
+
+pdf(paste("ADDPRO_Rabu_main2of2.pdf", sep=""), width=16, height=16)
+grid.arrange(Rabulist$Alcprweek_cat,
+             Rabulist$SigAlcprweek_cat,
+             Rabulist$hba1c_cat,
+             Rabulist$Sighba1c_cat,
+             Rabulist$act_cat,
+             Rabulist$Sigact_cat, layout_matrix = lay)
+dev.off()
+
+lay <- rbind(c(1,2),
+             c(3,4),
+             c(5,6),
+             c(7,8),
+             c(9,10),
+             c(11,12))
+
+pdf(paste("ADDPRO_PCoA_secondary.pdf", sep=""), width=13, height=26)
+grid.arrange(PCoAlist$BMI_cat,
+             PCoAlist$Waist_cat,
+             PCoAlist$whratio_cat,
+             PCoAlist$bp_cat,
+             PCoAlist$sbp_cat,
+             PCoAlist$dbp_cat,
+             PCoAlist$hr_cat,
+             PCoAlist$pp_cat,
+             PCoAlist$trig_cat,
+             PCoAlist$hdlc_cat,
+             PCoAlist$ldlc_cat,
+             PCoAlist$chol_cat, layout_matrix = lay)
+dev.off()
+
+pdf(paste("ADDPRO_Stackbar_secondary.pdf", sep=""), width=16, height=32)
+grid.arrange(Rabulist$BarBMI_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$BarWaist_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barwhratio_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barbp_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barsbp_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Bardbp_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barhr_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barpp_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Bartrig_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barhdlc_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barldlc_cat+theme(axis.text.x = element_text(angle = -20)),
+             Rabulist$Barchol_cat+theme(axis.text.x = element_text(angle = -20)), layout_matrix = lay)
+dev.off()
+
+
+lay <- rbind(c(1,2),
+             c(3,4),
+             c(5,6),
+             c(7,8),
+             c(9,10),
+             c(11,12),
+             c(13,14),
+             c(15,16),
+             c(17,18),
+             c(19,20),
+             c(21,22),
+             c(23,24))
+# 
+pdf(paste("ADDPRO_Rabu_secondary.pdf", sep=""), width=16, height=64)
+grid.arrange(Rabulist$BMI_cat,
+             Rabulist$SigBMI_cat,
+             Rabulist$Waist_cat,
+             Rabulist$SigWaist_cat,
+             Rabulist$whratio_cat,
+             Rabulist$Sigwhratio_cat,
+             Rabulist$bp_cat,
+             Rabulist$Sigbp_cat,
+             Rabulist$sbp_cat,
+             Rabulist$Sigsbp_cat,
+             Rabulist$dbp_cat,
+             Rabulist$Sigdbp_cat,
+             Rabulist$hr_cat,
+             Rabulist$Sighr_cat,
+             Rabulist$pp_cat,
+             Rabulist$Sigpp_cat,
+             Rabulist$trig_cat,
+             Rabulist$Sigtrig_cat,
+             Rabulist$hdlc_cat,
+             Rabulist$Sighdlc_cat,
+             Rabulist$ldlc_cat,
+             Rabulist$Sigldlc_cat,
+             Rabulist$chol_cat,
+             Rabulist$Sigchol_cat, layout_matrix = lay)
+dev.off()
+
+
+# ##Just checking if the test results correspond to the one without hellinger transformation
+# #Only includes rows without NAs from the i'th column
+# i<-"Risk"
+# Phe3<-Phe2[complete.cases(Phe2[,which( colnames(Phe2)==i )]),]
+# #Also subset columns
+# Microbio3<-dplyr::select(Microbio, one_of(Phe3$IDX))
+# #Hellinger transformation
+# #Microbio3 <- data.frame(t(decostand(t(Microbio3), method="hellinger")))
+# #Maks TSS
+# Microbio3<-sweep(Microbio3, 2, colSums(Microbio3), FUN="/")
+# #is scaled 
+# krutest<-data.frame(Value=as.numeric(Microbio3["Prevotella",]), Group=Phe3$Risk)
+# kruskal.test(Value ~ Group, data=krutest)
+# #colSums(Microbio3) 
+#  
+# Microbio3<-dplyr::select(Microbio, one_of(Phe3$IDX))
+# #Hellinger transformation
+# Microbio3 <- data.frame(t(decostand(t(Microbio3), method="hellinger")))
+# #Maks TSS
+# Microbio3<-sweep(Microbio3, 2, colSums(Microbio3), FUN="/")
+# #is scaled and hellinger transformed
+# krutest<-data.frame(Value=as.numeric(Microbio3["Prevotella",]), Group=Phe3$Risk)
+# kruskal.test(Value ~ Group, data=krutest)
+# #colSums(Microbio3) 
+```
+
+
+### PERMANOVA 
+Permutational Multivariate ANOVA based on  dissimilarities (Bray-Curtis, Hellinger transformed data) using vegan::adonis
+##### Microbiome
+Only used to validate assumptions of the PERMANOVA. For PERMANOVA results see loop in PCoA. 
+```{r eval=FALSE}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+
+##Consider moving to after test with Risk and gly_stat to keep these samples in test
+#Remove smoke values that are not 1:3 so the NA values 
+Phe2<-subset(Phe, p_gq_smoke %in% c(1:3))
+#Subset shared samples of all datasets 
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX))
+
+#Hellinger transformation
+Taxonomy2 <- data.frame(t(decostand(t(Microbio2), method="hellinger")))
+#Maks TSS
+Taxonomy2<-sweep(Taxonomy2, 2, colSums(Taxonomy2), FUN="/")
+
+#Dissimilarity 
+distmatrix <- vegdist(t(Taxonomy2), method="bray")
+
+#adonis can handle both continous and factor predictors 
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ Risk, Phe2, by="terms", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ gly_stat, Phe2, by="terms", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ p_gq_smoke, Phe2, by="terms", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+#With both risk and smoking
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ Risk + p_gq_smoke, Phe2, by="terms", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+#Swithcing order
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ p_gq_smoke + Risk, Phe2, by="terms", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+#Test with by = margin does not matter the order
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ p_gq_smoke + Risk, Phe2, by="margin", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+
+## Evaluating the model assumptions  
+TestModel <- with(Phe2, betadisper(distmatrix, Risk)) #Can not run 
+  #betadisper with multiple independant variables
+#TestModel
+#plot(TestModel)
+plot(TestModel, label=FALSE)
+boxplot(TestModel)
+anova(TestModel) #p>0.05 -> Assumption met
+#permutest(TestModel) 
+
+## Evaluating the model assumptions  
+TestModel <- with(Phe2, betadisper(distmatrix, p_gq_smoke)) #Can not run 
+  #betadisper with multiple independant variables
+#TestModel
+#plot(TestModel)
+plot(TestModel, label=FALSE)
+boxplot(TestModel)
+anova(TestModel) #p>0.05 -> Assumption met
+#permutest(TestModel) 
+
+# table(Phe2$gly_stat, Phe2$sex, useNA="always")
+# table(Phe2$gly_stat, Phe2$p_gq_smoke, useNA="always")
+# table(Phe2$p_gq_smoke, useNA="always")
+# table(Phe2$p_gq_high_bp_code, useNA="always")
+
+#Test with Risk and categorical variables, using by = margin.
+set.seed(1)
+adonisObject<-adonis2(distmatrix ~ Risk + Smoking + age_fup + sex + BMI_cat + whratio_cat + Waist_cat + hr_cat + pp_cat + bp_cat + sbp_cat + dbp_cat + act_cat + hba1c_cat + act_cat + Alcprweek_cat, Phe3, by="margin", 
+                      perm=999) #, perm=999 can increase to get exact p-values
+adonisObject #If significant then difference between groups
+
+# #Test with Risk and categorical variables, reduced, using by = margin.
+# set.seed(1)
+# adonisObject<-adonis2(distmatrix ~ Risk + Smoking + age_fup + sex + hba1c_cat, Phe3, by="margin", 
+#                       perm=999) #, perm=999 can increase to get exact p-values
+# adonisObject #If significant then difference between groups
+# 
+# #Test with Risk and continuous variables, using by = margin.
+# set.seed(1)
+# adonisObject<-adonis2(distmatrix ~ Risk + Smoking + age_fup + sex + bmi + whratio + Waist_av + hr_av + pp_av + sbp_av + dbp_av + act + p_lab
+
+```
+                      
+### MaAsLin: Multivariate Association with Linear Models
+Run default, but also with  min_abundance = 0.0001, min_prevalence = 0.1 (Remember did already perform filtering if running additional filtering after alpha diversity estimates)
+```{r eval=FALSE}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+
+Metadata2 <- Phe
+Taxonomy2 <- Microbio
+#Metabo2 <- Metabo
+
+
+row.names(Metadata2) <-Metadata2$IDX
+
+#Check order, removes smokers afterwards become false
+sum((rownames( Metadata2 ) == colnames( Taxonomy2 ))) == length(Taxonomy2)
+
+#Remove blank smokers, will remove samples automatically from taxonomy running Maaslin2
+Metadata2<-subset(Metadata2, p_gq_smoke %in% c(1:3))
+Metadata2$Smoking<-as.character(ifelse(grepl("1", Metadata2$p_gq_smoke), "Smoker",
+                              ifelse(grepl("2", Metadata2$p_gq_smoke), "Exsmoker",
+                                     ifelse(grepl("3", Metadata2$p_gq_smoke), 
+                                            "Nonsmoker", "NA"))))
+
+Metadata2$HOMAIR<-Metadata2$p_lab_insu0*Metadata2$p_lab_pglu0/22.5
+#fasting insulin (microU/L) x fasting glucose (nmol/L)/22.5.
+#Values provided are in pmol/L and mmol/L can not get the calculations to correspond to 
+#Some provide conversion factor to be 6 others 6.945 (1 µIU/mL = 6.00 pmol/L)
+
+Metadata2$whratio<-Metadata2$waist_av/Metadata2$hip_av
+
+##Select columns used in model
+Metadata2 <- dplyr::select(Metadata2, one_of(c('Risk', 'Smoking', 'bmi', 'age_fup', 'sex_cat', 
+                                        'waist_av', 'whratio', 'p_lab_trig', 'p_lab_chol', 
+                                        'p_lab_hdlc', 'p_lab_ldl', 'dbp_av', 'sbp_av')))
+#
+
+#Check order
+sum((rownames( Metadata2 ) == colnames( Taxonomy2 ))) == length(Taxonomy2)
+##Comments
+#It is okay to provide the taxonomy file like this with sample names as column. 
+  #However the standard is as rows. 
+#If samples are missing in either of the files they are removed from the analysis, 
+  #so the analysis will still run.
+#Same order also not needed
+
+
+#In description it is stated that data is expected to be normalized before using MaAsLin 
+  #"so are proportional data ranging from 0 to 1.0."
+#Consider performing the filtering before hand to keep TSS data 
+#Total sum scaling (Use relative abundances)
+Taxonomy2<-sweep(Taxonomy2, 2, colSums(Taxonomy2), FUN="/") 
+
+#In demo example https://github.com/biobakery/Maaslin2 about tweeking
+#Have site (place of sampling) and subject (multiple sample from the same person) as 
+  #random effects (don't see a reason why we should specify any variables as random 
+  #effects)
+#Can change to run other than the linear model
+#Can change transformation
+#Can change normalization from TSS to CLR, but also CSS, None and TMM. 
+
+#Microbiome
+fit_data <- Maaslin2(
+    Taxonomy2, Metadata2, 'Maaslin2_ADDPRO_Microbiome', transform = "NONE",
+    fixed_effects = c('Risk', 'Smoking', 'bmi', 'age_fup', 'sex_cat', 'waist_av', 'whratio', 
+                      'p_lab_trig', 'p_lab_chol', 'p_lab_hdlc', 'p_lab_ldl', 'dbp_av', 
+                      'sbp_av'), #The order does not change results
+    #random_effects = c('centre', 'operator'), #Consider including centre 
+      #and operator as random effect
+    reference = "Smoking,Nonsmoker",
+    normalization = 'NONE',
+    standardize = FALSE,
+    min_abundanc=0.0001,
+    min_prevalence=0.25)
+
+fit_data <- Maaslin2(
+    Taxonomy2, Metadata2, 'Maaslin2_ADDPRO_Microbiome_Reduced', transform = "NONE",
+    fixed_effects = c('Risk', 'Smoking', 'bmi', 'age_fup', 'sex_cat'), #The order does not change results
+    #random_effects = c('centre', 'operator'), #Consider including centre 
+      #and operator as random effect
+    reference = "Smoking,Nonsmoker",
+    normalization = 'NONE',
+    standardize = FALSE,
+    min_abundanc=0.0001,
+    min_prevalence=0.25)
+
+
+
+
+##Metabolome
+#fit_data <- Maaslin2(
+#    Metabo2, Metadata2, 'Maaslin2_ADDPRO_Metabolome', transform = "LOG",
+#    fixed_effects = c('Risk', 'Smoking', 'bmi', 'age_fup', 'sex_cat', 'waist_av', 'whratio', 
+#                      'p_lab_trig', 'p_lab_chol', 'p_lab_hdlc', 'p_lab_ldl', 'dbp_av', 
+#                      'sbp_av'), #The order does not change results
+#    #random_effects = c('centre', 'operator'), #Consider including centre 
+#      #and operator as random effect
+#    reference = "Smoking,Nonsmoker",
+#    normalization = 'NONE',
+#    standardize = FALSE,
+#    min_abundanc=0,
+#    min_prevalence=0.1)
+
+#fit_data <- Maaslin2(
+#    Metabo2, Metadata2, 'Maaslin2_ADDPRO_Metabolome_Reduced', transform = "LOG",
+#    fixed_effects = c('Risk', 'Smoking', 'bmi', 'age_fup', 'sex_cat'), #The order does not change results
+#    #random_effects = c('centre', 'operator'), #Consider including centre 
+#      #and operator as random effect
+#    reference = "Smoking,Nonsmoker",
+#    normalization = 'NONE',
+#    standardize = FALSE,
+#    min_abundanc=0,
+#    min_prevalence=0.1)
+
+#fit_data <- Maaslin2(
+#    Metabo2, Metadata2, 'Maaslin2_ADDPRO_Metabolome_OnlyRisk', transform = "LOG",
+#    fixed_effects = c('Risk'), #The order does not change results
+#    #random_effects = c('centre', 'operator'), #Consider including centre 
+#      #and operator as random effect
+#    normalization = 'NONE',
+#    standardize = FALSE,
+#    min_abundanc=0,
+#    min_prevalence=0.1)
+
+```
+
+### Filtration for both DAtest and sPLSDA also core microbiome
+Decided to do prevalence filtering on full dataset to make sure the same genera included
+Did not want to perform for alpha-diversity and beta-diversity measures. In beta-diversity measures are robust to these. Also consider what the DADA2 pipeline provides. 
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale")))
+library("DAtest")
+library("eulerr")
+
+#Core microbiome
+Microbiocore<-preDA(Microbio, min.samples=round(ncol(Microbio)*0.95), min.abundance=0) 
+Microbiocore<-Microbiocore[!(row.names(Microbiocore) %in% "Others"),]
+#Percentage from core
+sum(Microbiocore)/sum(Microbio)
+range(colSums(Microbiocore)/colSums(Microbio))
+#Most prevalent Veilonella, Streptococcus, Haemophilus and Prevotella
+Microbiofan4<-Microbiocore[row.names(Microbiocore) %in% c("Veillonella", "Streptococcus", "Haemophilus", "Prevotella"),]
+sum(Microbiofan4)/sum(Microbio)
+
+#Microbio<-preDA(Microbio, min.samples=round(ncol(Microbio)*0.2))
+Microbio<-preDA(Microbio, min.samples=round(ncol(Microbio)*0.2), min.abundance=0) 
+
+ROClist<-list()
+```
+
+
+### DAtest
+Validated on chol_cat, Risk and Smoking. Afterwards DAtest was used to run tests with selected methods DESeq2 Wald binary and LRT multiclass
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+# # Developmental version (recommended):
+# devtools::install_github("Russel88/DAtest")
+# # Version associated with bioRxiv paper:
+# # devtools::install_github("Russel88/DAtest@v2.7.5")
+# 
+# BiocManager::install(c("DESeq2","limma","edgeR","metagenomeSeq","baySeq","ALDEx2","impute","ANCOMBC"))
+# 
+# install.packages(c("samr","pscl","statmod","mvabund"))
+# 
+# # For drawing Venn diagrams
+# install.packages("eulerr")
+# 
+# # For post-hoc testing (generalized) linear models
+# install.packages("lsmeans")
+
+
+# #Some pruning/subsetting of taxa
+# See filtration above
+
+
+##The following variables where selected to validate differential abundance performance
+#Selected cholestorol binary, but not significant p-value in PERMANOVA
+table(Phe$chol_cat, useNA="always")
+
+#Selected Risk binary and significant p-value in PERMANOVA
+table(Phe$Risk, useNA="always")
+
+#Selected Smoking non-binary (called multi-class predictor in DAtest see DAtest wiki for more information) and highly significant p-value in PERMANOVA
+table(Phe$Smoking, useNA="always")
+
+# #################chol_cat no NA
+# #runtimeDA(Microbio, predictor = varvec)
+# #Check order
+# sum(colnames(Microbio)!=Phe$IDX)==0
+# 
+# test <- testDA(Microbio, predictor = Phe$chol_cat, R=20, tests=c("abc", "aov", "ds2", "ere", "vli", "lrm", "msf", "ttt", "wil")) #Remove adx takes a lot of time
+# summary(test)
+# plot(test)
+# pdf(paste("ADDPRO_DAtest1_Chol", ".pdf", sep=""), width=12, height=6)
+# plot(test)
+# dev.off()
+# test$run.times
+# 
+# fpr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FPR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False positive rate")
+# fdr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FDR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False discovery rate")
+# auc_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=AUC)) +
+#   geom_hline(yintercept=0.5, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("AUC")
+# power_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=Power)) +
+#   geom_hline(yintercept=0.8, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("Power")
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# 
+# pdf(paste("ADDPRO_DAtest2_Chol", ".pdf", sep=""), width=12, height=6)
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# dev.off()
+# 
+# 
+# 
+# #################Risk
+# #Only includes rows high vs low
+# Phe2<-subset(Phe, Risk %in% c("High", "Low"))
+# #Also subset columns
+# Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+# 
+# 
+# #runtimeDA(Microbio2, predictor = varvec)
+# #Check order
+# sum(colnames(Microbio2)!=Phe2$IDX)==0
+# table(Phe2$Risk, useNA="always")
+# Phe2$Risk<-droplevels(Phe2$Risk)
+# test <- testDA(Microbio2, predictor = Phe2$Risk, R=20, tests=c("abc", "aov", "ds2", "ere", "vli", "lrm", "msf", "ttt", "wil")) #Remove adx takes a lot of time
+# summary(test)
+# plot(test)
+# pdf(paste("ADDPRO_DAtest1_Risk", ".pdf", sep=""), width=12, height=6)
+# plot(test)
+# dev.off()
+# test$run.times
+# 
+# 
+# fpr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FPR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False positive rate")
+# fdr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FDR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False discovery rate")
+# auc_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=AUC)) +
+#   geom_hline(yintercept=0.5, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("AUC")
+# power_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=Power)) +
+#   geom_hline(yintercept=0.8, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("Power")
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# 
+# pdf(paste("ADDPRO_DAtest2_Risk", ".pdf", sep=""), width=12, height=6)
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# dev.off()
+# 
+# 
+# #################Smoking
+# #Remove NA
+# Phe2<-Phe[complete.cases(Phe$Smoking),]
+# #Also subset columns
+# Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+# 
+# 
+# #runtimeDA(Microbio2, predictor = varvec)
+# #Check order
+# sum(colnames(Microbio2)!=Phe2$IDX)==0
+# 
+# test <- testDA(Microbio2, predictor = Phe2$Smoking, R=20, tests=c("abc", "aov", "ds2", "erq", "vli", "kru", "zig")) 
+# summary(test)
+# plot(test)
+# pdf(paste("ADDPRO_DAtest1_Smoking", ".pdf", sep=""), width=12, height=6)
+# plot(test)
+# dev.off()
+# test$run.times
+# 
+# 
+# 
+# fpr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FPR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False positive rate")
+# fdr_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=FDR)) +
+#   geom_hline(yintercept=0.05, color="red") +
+#   geom_hline(yintercept=0.1, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("False discovery rate")
+# auc_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=AUC)) +
+#   geom_hline(yintercept=0.5, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("AUC")
+# power_plot <- ggplot(test$table, aes(x=fct_reorder(Method, -FPR), y=Power)) +
+#   geom_hline(yintercept=0.8, color="red") +
+#   geom_boxplot() + xlab("") + ylab("") +
+#   geom_point() +
+#   ylim(0,1) +
+#   coord_flip() + theme_minimal() + ggtitle("Power")
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# 
+# pdf(paste("ADDPRO_DAtest2_Smoking", ".pdf", sep=""), width=12, height=6)
+# cowplot::plot_grid(fpr_plot, fdr_plot, auc_plot, power_plot, nrow=2)
+# dev.off()
+
+
+##Extract test for all variables 
+#################chol_cat
+# res <- allDA(Microbio, predictor = Phe$chol_cat) 
+# vennDA(res, tests = c("aov", "kru"))
+
+final <- DA.ds2(Microbio, predictor = Phe$chol_cat)
+#kable(final[,1:10])
+final
+write.table(final, file="chol_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="chol_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$chol_cat)
+#kable(final[,1:10])
+final
+write.table(final, file="chol_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="chol_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################Risk
+#Only includes rows high vs low
+Phe2<-subset(Phe, Risk %in% c("High", "Low"))
+Phe2$Risk<-droplevels(Phe2$Risk)
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$Risk)
+#kable(final[,1:10])
+final
+write.table(final, file="Risk_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Risk_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$Risk)
+#kable(final[,1:10])
+final
+write.table(final, file="Risk_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Risk_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################Smoking
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$Smoking),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+
+# res <- allDA(Microbio, predictor = Phe$Smoking) 
+# vennDA(res, tests = c("kru", "aov", "lma")) #ds2 does not seem implemented
+final <- DA.ds2(Microbio2, predictor = Phe2$Smoking, out.all=TRUE) #It is LRT so don't look at ordering
+##kable(final[,1:10])
+final
+write.table(final, file="Smoking_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Smoking_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$Smoking) 
+##kable(final[,1:10])
+final
+write.table(final, file="Smoking_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Smoking_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################gly_stat 
+table(Phe$gly_stat, useNA="always")
+#Only includes rows with risk groups and low risk
+Phe2<-subset(Phe, gly_stat %in% c(1:5))
+Phe2$gly_stat<-droplevels(Phe2$gly_stat)
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX))
+final <- DA.ds2(Microbio2, predictor = as.factor(Phe2$gly_stat), out.all=TRUE) #It is LRT so don't look at ordering
+final
+final <- DA.kru(Microbio2, predictor = as.factor(Phe2$gly_stat)) 
+final
+#################sex_cat
+table(Phe$sex_cat, useNA="always")
+final <- DA.ds2(Microbio, predictor = Phe$sex_cat, out.all=TRUE) 
+final
+write.table(final, file="sex_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="sex_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$sex_cat)
+final
+write.table(final, file="sex_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="sex_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################BMI_cat
+table(Phe$BMI_cat, useNA="always")
+Phe2<-subset(Phe, BMI_cat %in% c("Healthyweight", "Overweight", "Obese"))
+Phe2$BMI_cat<-droplevels(Phe2$BMI_cat)
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX))
+final <- DA.ds2(Microbio2, predictor = Phe2$BMI_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="BMI_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="BMI_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$BMI_cat) 
+final
+write.table(final, file="BMI_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="BMI_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################Waist_cat
+table(Phe$Waist_cat, useNA="always")
+final <- DA.ds2(Microbio, predictor = Phe$Waist_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="Waist_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Waist_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$Waist_cat) 
+final
+write.table(final, file="Waist_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Waist_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################whratio_cat
+table(Phe$whratio_cat, useNA="always")
+final <- DA.ds2(Microbio, predictor = Phe$whratio_cat)
+final
+write.table(final, file="whratio_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="whratio_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$whratio_cat)
+final
+write.table(final, file="whratio_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="whratio_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################Alcprweek_cat 
+table(Phe$Alcprweek_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$Alcprweek_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$Alcprweek_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="Alcprweek_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Alcprweek_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$Alcprweek_cat) 
+final
+write.table(final, file="Alcprweek_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="Alcprweek_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################bp_cat
+table(Phe$bp_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$bp_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$bp_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="bp_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="bp_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$bp_cat)
+final
+write.table(final, file="bp_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="bp_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################sbp_cat
+table(Phe$sbp_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$sbp_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$sbp_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="sbp_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="sbp_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$sbp_cat) 
+final
+write.table(final, file="sbp_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="sbp_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################dbp_cat
+table(Phe$dbp_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$dbp_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$dbp_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="dbp_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="dbp_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$dbp_cat) 
+final
+write.table(final, file="dbp_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="dbp_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################hr_cat
+table(Phe$hr_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$hr_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$hr_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="hr_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hr_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$hr_cat) 
+final
+write.table(final, file="hr_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hr_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################pp_cat
+table(Phe$pp_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$pp_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$pp_cat) 
+final
+write.table(final, file="pp_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="pp_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$pp_cat) 
+final
+write.table(final, file="pp_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="pp_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################trig_cat
+table(Phe$trig_cat, useNA="always")
+final <- DA.ds2(Microbio, predictor = Phe$trig_cat)
+final
+write.table(final, file="trig_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="trig_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$trig_cat)
+final
+write.table(final, file="trig_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="trig_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################hdlc_cat
+table(Phe$hdlc_cat, useNA="always")
+final <- DA.ds2(Microbio, predictor = Phe$hdlc_cat)
+final
+write.table(final, file="hdlc_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hdlc_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio, predictor = Phe$hdlc_cat)
+final
+write.table(final, file="hdlc_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hdlc_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################ldlc_cat
+table(Phe$ldlc_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$ldlc_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$ldlc_cat) 
+final
+write.table(final, file="ldlc_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="ldlc_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$ldlc_cat) 
+final
+write.table(final, file="ldlc_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="ldlc_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################act_cat
+table(Phe$act_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$act_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$act_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="act_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="act_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$act_cat) 
+final
+write.table(final, file="act_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="act_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+#################Glycaemia_Status
+table(Phe$Glycaemia_Status, useNA="always") #see gly_stat same test
+#################hba1c_cat
+table(Phe$hba1c_cat, useNA="always")
+#Remove NA
+Phe2<-Phe[complete.cases(Phe$hba1c_cat),]
+#Also subset columns
+Microbio2<-dplyr::select(Microbio, one_of(Phe2$IDX)) 
+final <- DA.ds2(Microbio2, predictor = Phe2$hba1c_cat, out.all=TRUE) #It is LRT so don't look at ordering
+final
+write.table(final, file="hba1c_cat_ds2.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hba1c_cat_ds2_sig.txt", sep="\t", dec=",", row.names=F)
+final <- DA.kru(Microbio2, predictor = Phe2$hba1c_cat) 
+final
+write.table(final, file="hba1c_cat_kru.txt", sep="\t", dec=",", row.names=F)
+write.table(final[final$pval<0.05,], file="hba1c_cat_kru_sig.txt", sep="\t", dec=",", row.names=F)
+```
+
+
+### sPLS-DA mixOmics 
+##### Smoking 
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$Smoking, useNA="always")
+Phe2<-Phe[complete.cases(Phe$Smoking), ] #NA
+Phe2<-subset(Phe2, Smoking %in% c("Smoker", "Nonsmoker")) #also removes NA, but above can be easier to implement in loop
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$Smoking
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 300, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 4, # calculate for first 4 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(4))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="Smoking_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="Smoking_comp2.txt", sep="\t", dec=",", row.names=T)
+comp3 <- plotLoadings(final.splsda, comp = 3, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp3, n=20)
+write.table(comp3, file="Smoking_comp3.txt", sep="\t", dec=",", row.names=T)
+comp4 <- plotLoadings(final.splsda, comp = 4, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp4, n=20)
+write.table(comp4, file="Smoking_comp4.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist") #Changed from Mahalanobis to be consistent 
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+
+auc.splsda = auroc(final.splsda, roc.comp = 4, print = FALSE) 
+ROClist[["SmokingROC"]] <-auc.splsda$graph.Comp4
+
+#AUC
+print("AUC")
+auc.splsda$Comp4
+```
+
+
+##### Smoking clr
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$Smoking, useNA="always")
+Phe2<-Phe[complete.cases(Phe$Smoking), ] #NA
+Phe2<-subset(Phe2, Smoking %in% c("Smoker", "Nonsmoker")) #also removes NA, but above can be easier to implement in loop
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+# #Hellinger transformation
+# X <- data.frame(t(decostand(t(X), method="hellinger")))
+# #Maks TSS
+# X<-sweep(X, 2, colSums(X), FUN="/")
+# #rowSums(X)
+# sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$Smoking
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+X<-X+1
+addp.splsda <- splsda(X, Y, ncomp = 10, logratio = 'CLR')  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 300, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 4, # calculate for first 4 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(4))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX,
+                       logratio = 'CLR')
+
+#########Loadings
+plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist")
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Nonsmoker", "Smoker")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+
+
+#AUC
+print("AUC")
+auc.splsda$Comp2
+```
+
+
+
+##### sex_cat
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$sex_cat, useNA="always")
+Phe2<-Phe[complete.cases(Phe$sex_cat), ] #NA
+#Phe2<-subset(Phe2, sex_cat %in% c("Female", "Male")) #also removes NA, but above can be easier to implement in loop
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$sex_cat
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 300, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 2, # calculate for first 2 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(2))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="sex_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="sex_comp2.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist")
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Female", "Male")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Female", "Male")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Female", "Male")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+ROClist[["sexROC"]] <-auc.splsda$graph.Comp2
+
+
+#AUC
+print("AUC")
+auc.splsda$Comp2
+```
+
+
+
+##### Risk
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$Risk, useNA="always")
+Phe2<-Phe[complete.cases(Phe$Risk), ] #NA
+Phe2<-subset(Phe2, Risk %in% c("High", "Low")) #also removes NA, but above can be easier to implement in loop
+Phe2$Risk<-droplevels(Phe2$Risk)
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$Risk
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 100, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 2, # calculate for first 2 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+
+plot(tune.splsda.addp, col = color.jet(2))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+#optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+optimal.ncomp <- 2 #manually set, see perf.splsda.addp$choice.ncomp above
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp,
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="Risk_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="Risk_comp2.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist")
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Low", "High")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Low", "High")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("High", "Low")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+ROClist[["RiskROC"]] <-auc.splsda$graph.Comp2
+
+#AUC
+print("AUC")
+auc.splsda$Comp2
+```
+
+
+##### Alcprweek_cat 
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$Alcprweek_cat, useNA="always")
+Phe2<-Phe[complete.cases(Phe$Alcprweek_cat), ] #NA
+#Phe2<-subset(Phe2, Alcprweek_cat %in% c("High", "Abstinence")) #also removes NA, but above can be easier to implement in loop
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$Alcprweek_cat
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 180, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 2, # calculate for first 4 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(2))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="Alcprweek_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="Alcprweek_comp2.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist") #Changed from Mahalanobis to be consistent 
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Abstinence", "Moderate", "High")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Abstinence", "Moderate", "High")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Abstinence", "Moderate", "High")), Y.test))
+
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+ROClist[["alcROC"]] <-auc.splsda$graph.Comp2
+
+#AUC
+print("AUC")
+auc.splsda$Comp2
+```
+
+
+##### BMI_cat 
+```{r}
+# rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+# 
+# set.seed(99) # for reproducibility, remove for normal use
+# 
+# Microbio2<-Microbio
+# #Subset select or just remove NA
+# table(Phe$BMI_cat, useNA="always")
+# Phe2<-Phe[complete.cases(Phe$BMI_cat), ] #NA
+# Phe2<-subset(Phe2, BMI_cat %in% c("Healthyweight", "Obese", "Overweight")) #also removes NA, but above can be easier to implement in loop
+# Phe2$BMI_cat<-droplevels(Phe2$BMI_cat)
+# X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+# ##Remove orgs that are not present after subsetting.
+# X <- X[rowSums(X)>0,]
+# 
+# 
+# #Hellinger transformation
+# X <- data.frame(t(decostand(t(X), method="hellinger")))
+# #Maks TSS
+# X<-sweep(X, 2, colSums(X), FUN="/")
+# #rowSums(X)
+# sum(colnames(X)!=Phe2$IDX)==0
+# 
+# 
+# X<-t(X)
+# Y<-Phe2$BMI_cat
+# 
+# sum(rownames(X)!=Phe2$IDX)==0 
+# 
+# dim(X) # check the dimensions of the X dataframe
+# summary(Y) # check the distribution of class labels
+# 
+# # Barplot of the variance each principal component explains 
+# pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+# plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+# 
+# 
+# # Preliminary (unsupervised) analysis with PCA 
+# plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+#           legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+# 
+# addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+# 
+# ## Sample plots after a basic PLS-DA model was operated on this data.
+# # plot the samples projected onto the first two components of the PLS-DA subspace
+# plotIndiv(addp.splsda , comp = 1:2, 
+#           group = Y, ind.names = FALSE,  # colour points by class
+#           ellipse = TRUE, # include 95% confidence ellipse for each class
+#           legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+# 
+# # use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+# background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+# 
+# # plot the samples projected onto the first two components of the PLS-DA subspace
+# plotIndiv(addp.splsda, comp = 1:2,
+#           group = Y, ind.names = FALSE, # colour points by class
+#           background = background, # include prediction background for each class
+#           legend = TRUE, title = " (b) PLSDA with prediction background")
+# 
+# ## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# # undergo performance evaluation in order to tune the number of components to use
+# perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+#                           folds = 5, nrepeat = 10, # use repeated cross-validation
+#                           progressBar = FALSE, auc = TRUE) # include AUC values
+# 
+# # plot the outcome of performance evaluation across all ten components
+# plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+#      legend.position = "horizontal")
+# 
+# 
+# perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+# 
+# ## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# # grid of possible keepX values that will be tested for each component
+# list.keepX <- c(1:10,  seq(20, 180, 10))
+# 
+# # undergo the tuning process to determine the optimal number of variables
+# tune.splsda.addp <- tune.splsda(X, Y, ncomp = 4, # calculate for first 4 components
+#                                  validation = 'Mfold',
+#                                  folds = 5, nrepeat = 10, # use repeated cross-validation
+#                                  dist = 'max.dist', # use max.dist measure
+#                                  measure = "BER", # use balanced error rate of dist measure
+#                                  test.keepX = list.keepX,
+#                                  cpus = 2 # allow for parallelisation to decrease runtime
+#                                  ) 
+# 
+# plot(tune.splsda.addp, col = color.jet(4))
+# 
+# tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+# 
+# tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+# 
+# #optimal.ncomp <- tune.splsda.addp$choice.ncomp$ncomp
+# optimal.ncomp <- 4 #See above
+# optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+# 
+# # form final model with optimised values for component and variable count
+# final.splsda <- splsda(X, Y, 
+#                        ncomp = optimal.ncomp, 
+#                        keepX = optimal.keepX)
+# 
+# #########Loadings
+# #plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+# #plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+# 
+# comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+#                       size.title = 1)
+# head(comp1, n=20)
+# comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+#                       size.title = 1)
+# head(comp2, n=20)
+# comp3 <- plotLoadings(final.splsda, comp = 3, method = 'mean', contrib = 'max',
+#                       size.title = 1)
+# head(comp3, n=20)
+# comp4 <- plotLoadings(final.splsda, comp = 4, method = 'mean', contrib = 'max',
+#                       size.title = 1)
+# head(comp4, n=20)
+# 
+# ##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+# plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+#           group = Y, ind.names = FALSE, # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = ' (a) sPLS-DA on addp, comp 1 & 2')
+# 
+# # plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+# #           group = Y, ind.names = FALSE,  # colour by class label
+# #           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+# #           title = '(b) sPLS-DA on addp, comp 1 & 3')
+# 
+# ##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# # form new perf() object which utilises the final model
+# perf.splsda.addp <- perf(final.splsda, 
+#                           folds = 5, nrepeat = 10, # use repeated cross-validation
+#                           validation = "Mfold", dist = "max.dist",  # use max.dist measure
+#                           progressBar = FALSE)
+# 
+# # plot the stability of each feature for the first three components, 'h' type refers to histogram
+# par(mfrow=c(1,2))
+# plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features', 
+#      main = '(a) Comp 1', las =2)
+# plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features', 
+#      main = '(b) Comp 2', las =2)
+# # plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+# #      ylab = 'Stability', 
+# #      xlab = 'Features',
+# #      main = '(c) Comp 3', las =2)
+# par(mfrow=c(1,1))
+# 
+# 
+# train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+# test <- setdiff(1:nrow(X), train) # rest is part of the test set
+# 
+# # store matrices into training and test set:
+# X.train <- X[train, ]
+# X.test <- X[test,]
+# Y.train <- Y[train]
+# Y.test <- Y[test]
+# 
+# # train the model
+# train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+# 
+# # use the model on the Xtest set
+# predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist") #Changed from Mahalanobis to be consistent 
+# 
+# # evaluate the prediction accuracy for the first two components
+# predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+# table(factor(predict.comp2, levels = c("Healthyweight", "Overweight", "Obese")), Y.test)
+# #Correct classification rate
+# sum(diag(table(factor(predict.comp2, levels = c("Healthyweight", "Overweight", "Obese")), Y.test)))/
+#   sum(table(factor(predict.comp2, levels = c("Healthyweight", "Overweight", "Obese")), Y.test))
+# 
+# 
+# ## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+# auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+# 
+# auc.splsda = auroc(final.splsda, roc.comp = 4, print = FALSE) # AUROC for the first and fourth component
+# 
+# #AUC
+# print("AUC")
+# auc.splsda$Comp4
+
+```
+
+
+##### act_cat
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$act_cat, useNA="always")
+Phe2<-Phe[complete.cases(Phe$act_cat), ] #NA
+#Phe2$act_cat<-droplevels(Phe2$act_cat)
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$act_cat
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 180, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 4, # calculate for first 4 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "overall", # changed to overall because of unbalanced group sizes
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(4))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- 3 #See above max dist
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="act_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="act_comp2.txt", sep="\t", dec=",", row.names=T)
+comp3 <- plotLoadings(final.splsda, comp = 3, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp3, n=20)
+write.table(comp3, file="act_comp3.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist") #Changed from Mahalanobis to be consistent 
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,3]
+table(factor(predict.comp2, levels = c("Low", "Medium", "High")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Low", "Medium", "High")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Low", "Medium", "High")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 3, print = FALSE) # AUROC for the first and second component
+ROClist[["actROC"]] <-auc.splsda$graph.Comp3
+
+#AUC
+print("AUC")
+auc.splsda$Comp3
+
+
+```
+
+##### hba1c_cat
+```{r}
+rm(list=setdiff(ls(), c("FeaturePic2", "Pic2", "Phe", "Microbio", "FeatureMic", "Metabo", "paretoscale", "ROClist")))
+
+set.seed(99) # for reproducibility, remove for normal use
+
+Microbio2<-Microbio
+#Subset select or just remove NA
+table(Phe$hba1c_cat, useNA="always")
+Phe2<-Phe[complete.cases(Phe$hba1c_cat), ] #NA
+Phe2<-subset(Phe2, hba1c_cat %in% c("Low", "Medium")) #also removes NA, but above can be easier to implement in loop
+Phe2$hba1c_cat<-droplevels(Phe2$hba1c_cat)
+X<-dplyr::select(Microbio2, one_of(Phe2$IDX)) #Also in X
+##Remove orgs that are not present after subsetting.
+X <- X[rowSums(X)>0,]
+
+
+#Hellinger transformation
+X <- data.frame(t(decostand(t(X), method="hellinger")))
+#Maks TSS
+X<-sweep(X, 2, colSums(X), FUN="/")
+#rowSums(X)
+sum(colnames(X)!=Phe2$IDX)==0
+
+
+X<-t(X)
+Y<-Phe2$hba1c_cat
+
+sum(rownames(X)!=Phe2$IDX)==0 
+
+dim(X) # check the dimensions of the X dataframe
+summary(Y) # check the distribution of class labels
+
+# Barplot of the variance each principal component explains 
+pca.addp = pca(X, ncomp = 10, center = TRUE, scale = TRUE) # run pca method on data
+plot(pca.addp)  # barplot of the eigenvalues (explained variance per component)
+
+
+# Preliminary (unsupervised) analysis with PCA 
+plotIndiv(pca.addp, group = Y, ind.names = FALSE, # plot the samples projected
+          legend = TRUE, title = 'PCA on addp, comp 1 - 2') # onto the PCA subspace
+
+addp.splsda <- splsda(X, Y, ncomp = 10)  # set ncomp to 10 for performance assessment later
+
+## Sample plots after a basic PLS-DA model was operated on this data.
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda , comp = 1:2, 
+          group = Y, ind.names = FALSE,  # colour points by class
+          ellipse = TRUE, # include 95% confidence ellipse for each class
+          legend = TRUE, title = '(a) PLSDA with confidence ellipses')
+
+# use the max.dist measure to form decision boundaries between classes based on PLS-DA data
+background = background.predict(addp.splsda, comp.predicted=2, dist = "max.dist")
+
+# plot the samples projected onto the first two components of the PLS-DA subspace
+plotIndiv(addp.splsda, comp = 1:2,
+          group = Y, ind.names = FALSE, # colour points by class
+          background = background, # include prediction background for each class
+          legend = TRUE, title = " (b) PLSDA with prediction background")
+
+## Tuning the number of components in PLS-DA. For each component, repeated cross-validation (10 × 3-fold CV) is used to evaluate the PLS-DA classification performance (OER and BER), for each type of prediction distance; `max.dist`, `centroids.dist` and `mahalanobis.dist`."----
+# undergo performance evaluation in order to tune the number of components to use
+perf.splsda.addp <- perf(addp.splsda, validation = "Mfold", 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          progressBar = FALSE, auc = TRUE) # include AUC values
+
+# plot the outcome of performance evaluation across all ten components
+plot(perf.splsda.addp, col = color.mixo(5:7), sd = TRUE,
+     legend.position = "horizontal")
+
+
+perf.splsda.addp$choice.ncomp # what is the optimal value of components according to perf()
+
+## Tuning keepX for the sPLS-DA. Each coloured line represents the balanced error rate (y-axis) per component across all tested keepX values (x-axis) with the standard deviation based on the repeated cross-validation folds. As sPLS-DA is an iterative algorithm, values represented for a given component (e.g. comp 1 to 2) include the optimal keepX value chosen for the previous component (comp 1)."----
+# grid of possible keepX values that will be tested for each component
+list.keepX <- c(1:10,  seq(20, 180, 10))
+
+# undergo the tuning process to determine the optimal number of variables
+tune.splsda.addp <- tune.splsda(X, Y, ncomp = 4, # calculate for first 4 components
+                                 validation = 'Mfold',
+                                 folds = 5, nrepeat = 10, # use repeated cross-validation
+                                 dist = 'max.dist', # use max.dist measure
+                                 measure = "BER", # use balanced error rate of dist measure
+                                 test.keepX = list.keepX,
+                                 cpus = 2 # allow for parallelisation to decrease runtime
+                                 ) 
+
+plot(tune.splsda.addp, col = color.jet(4))
+
+tune.splsda.addp$choice.ncomp$ncomp # what is the optimal value of components according to tune.splsda()
+
+tune.splsda.addp$choice.keepX # what are the optimal values of variables according to tune.splsda()
+
+optimal.ncomp <- 2 #See above max dist
+optimal.keepX <- tune.splsda.addp$choice.keepX[1:optimal.ncomp]
+
+# form final model with optimised values for component and variable count
+final.splsda <- splsda(X, Y, 
+                       ncomp = optimal.ncomp, 
+                       keepX = optimal.keepX)
+
+#########Loadings
+#plotLoadings(final.splsda, comp=1, contrib = 'max', method = 'mean', size.title = 1)
+#plotLoadings(final.splsda, comp=2, contrib = 'max', method = 'mean', size.title = 1)
+
+comp1 <- plotLoadings(final.splsda, comp = 1, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp1, n=20)
+write.table(comp1, file="hba1c_comp1.txt", sep="\t", dec=",", row.names=T)
+comp2 <- plotLoadings(final.splsda, comp = 2, method = 'mean', contrib = 'max',
+                      size.title = 1)
+head(comp2, n=20)
+write.table(comp2, file="hba1c_comp2.txt", sep="\t", dec=",", row.names=T)
+
+##  Sample plots from sPLS-DA including 95% confidence ellipses. Samples are projected into the space spanned by the first three components. (a) Components 1 and 2 and (b) Components 1 and 3.
+plotIndiv(final.splsda, comp = c(1,2), # plot samples from final model
+          group = Y, ind.names = FALSE, # colour by class label
+          ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+          title = ' (a) sPLS-DA on addp, comp 1 & 2')
+
+# plotIndiv(final.splsda, comp = c(1,3), # plot samples from final model
+#           group = Y, ind.names = FALSE,  # colour by class label
+#           ellipse = TRUE, legend = TRUE, # include 95% confidence ellipse
+#           title = '(b) sPLS-DA on addp, comp 1 & 3')
+
+##Stability of variable selection from the sPLS-DA. The barplot represents the frequency of selection across repeated CV folds for each selected gene for component 1 (a), 2 (b) and 3 (c)."----
+# form new perf() object which utilises the final model
+perf.splsda.addp <- perf(final.splsda, 
+                          folds = 5, nrepeat = 10, # use repeated cross-validation
+                          validation = "Mfold", dist = "max.dist",  # use max.dist measure
+                          progressBar = FALSE)
+
+# plot the stability of each feature for the first three components, 'h' type refers to histogram
+par(mfrow=c(1,2))
+plot(perf.splsda.addp$features$stable[[1]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(a) Comp 1', las =2)
+plot(perf.splsda.addp$features$stable[[2]], type = 'h', 
+     ylab = 'Stability', 
+     xlab = 'Features', 
+     main = '(b) Comp 2', las =2)
+# plot(perf.splsda.addp$features$stable[[3]], type = 'h', 
+#      ylab = 'Stability', 
+#      xlab = 'Features',
+#      main = '(c) Comp 3', las =2)
+par(mfrow=c(1,1))
+
+
+train <- sample(1:nrow(X), 0.75*nrow(X)) # randomly select 75% of samples in training
+test <- setdiff(1:nrow(X), train) # rest is part of the test set
+
+# store matrices into training and test set:
+X.train <- X[train, ]
+X.test <- X[test,]
+Y.train <- Y[train]
+Y.test <- Y[test]
+
+# train the model
+train.splsda.addp <- splsda(X.train, Y.train, ncomp = optimal.ncomp, keepX = optimal.keepX)
+
+# use the model on the Xtest set
+predict.splsda.addp <- predict(train.splsda.addp, X.test, dist = "max.dist") #Changed from Mahalanobis to be consistent 
+
+# evaluate the prediction accuracy for the first two components
+predict.comp2 <- predict.splsda.addp$class$max.dist[,2]
+table(factor(predict.comp2, levels = c("Low", "Medium")), Y.test)
+#Correct classification rate
+sum(diag(table(factor(predict.comp2, levels = c("Low", "Medium")), Y.test)))/
+  sum(table(factor(predict.comp2, levels = c("Low", "Medium")), Y.test))
+
+## ROC curve and AUC from sPLS-DA on component 1 (a) and all (two) components (b) averaged across one-vs.-all comparisons."----
+auc.splsda = auroc(final.splsda, roc.comp = 1, print = FALSE) # AUROC for the first component
+
+auc.splsda = auroc(final.splsda, roc.comp = 2, print = FALSE) # AUROC for the first and second component
+ROClist[["hba1cROC"]] <-auc.splsda$graph.Comp2
+
+#AUC
+print("AUC")
+auc.splsda$Comp2
+
+
+```
+
+#####ROC figure
+```{r}
+# #Have the plots stored in list
+# lay <- rbind(c(1,2),
+#              c(3,4),
+#              c(5,6))
+# 
+# pdf(paste("ADDPRO_ROC_main.pdf", sep=""), width=13, height=13)
+# grid.arrange(ROClist$RiskROC,
+#              ROClist$SmokingROC,
+#              ROClist$sexROC,
+#              ROClist$alcROC,
+#              ROClist$hba1cROC,
+#              ROClist$actROC, layout_matrix = lay)
+# dev.off()
+```
+
+
+
+## Additional
+### Session information
+```{r session_info}
+sessionInfo()
+
+```
+
+
+### This document was processed on: 
+```{r}
+Sys.Date()
+```
